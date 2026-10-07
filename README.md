@@ -235,3 +235,13 @@ curl http://localhost:8080/health
 ## Архитектура
 
 <img width="487" height="211" alt="image" src="https://github.com/user-attachments/assets/53908e42-de9f-4a99-a9a5-3c9104a40b26" />
+
+## Планы развития
+
+- Добавить refresh tokens для обновления сессий без повторного логина
+- Реализовать эндпоинт PUT /users/{id} для обновления данных
+- Добавить пагинацию и фильтрацию в GET /users
+- Интегрировать логгер (slog / zap)
+- Написать юнит-тесты с моками репозитория
+- Добавить rate limiting
+- Настроить CI/CD через GitHub Actions
