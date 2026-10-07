@@ -68,15 +68,10 @@ JWT_EXPIRATION_HOURS=24
 docker-compose up --build
 ```
 
-**5. Проверьте работоспособность:**
+**5. Проверьте работоспособность (Корректный результат выполнения: OK):**
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-Должен вернуть: OK
 API будет доступен по адресу: http://localhost:8080
-
-```bash
-http://localhost:8080
-```
