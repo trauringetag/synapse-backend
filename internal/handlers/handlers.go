@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"golang-rest-api/internal/repository" // Убедись, что имя модуля в go.mod совпадает (здесь "go-api")
+	"golang-rest-api/internal/repository"
 )
 
 // Handlers хранит зависимости, необходимые для обработки HTTP-запросов.
-// Мы зависим от интерфейса, а не от конкретной реализации БД.
+// Зависит от интерфейса, а не от конкретной реализации БД.
 type Handlers struct {
 	userRepo repository.UserRepository
 }
@@ -28,7 +28,7 @@ func respondJSON(w http.ResponseWriter, status int, payload any) {
 	w.WriteHeader(status)
 
 	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false) // Сохраняем русские символы без экранирования
+	encoder.SetEscapeHTML(false) // Сохраняем кириллицу без экранирования
 	if err := encoder.Encode(payload); err != nil {
 		// Если не смогли закодировать JSON, это уже критическая ошибка сервера
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)

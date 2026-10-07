@@ -8,7 +8,7 @@ import (
 
 	"golang-rest-api/internal/database"
 	"golang-rest-api/internal/handlers"
-	"golang-rest-api/internal/repository" // Добавляем импорт репозитория
+	"golang-rest-api/internal/repository"
 
 	"github.com/joho/godotenv"
 )
@@ -53,7 +53,7 @@ func main() {
 
 	mux.HandleFunc("GET /users", h.GetUsers)
 	mux.HandleFunc("POST /users", h.CreateUser)
-	mux.HandleFunc("DELETE /users/{id}", h.DeleteUser) // 👈 Добавили удаление
+	mux.HandleFunc("DELETE /users/{id}", h.DeleteUser)
 
 	// Простой эндпоинт для проверки работоспособности (Health Check)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -68,10 +68,10 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("🚀 Сервер успешно запущен и слушает порт :%s", port)
+	log.Printf("Сервер успешно запущен и слушает порт :%s", port)
 
 	// http.ListenAndServe блокирует выполнение, пока сервер работает
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatalf("💥 Сервер упал: %v", err)
+		log.Fatalf("Сервер упал: %v", err)
 	}
 }
