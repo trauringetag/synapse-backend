@@ -18,7 +18,6 @@ type Handlers struct {
 	DB *pgxpool.Pool
 }
 
-// GET /users
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(context.Background(), "SELECT id, name, email FROM users ORDER BY id DESC LIMIT 50")
 	if err != nil {
@@ -37,11 +36,12 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 		users = append(users, u)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	encoder.Encode(users)
 }
 
-// POST /users
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var u User
 	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
@@ -60,7 +60,9 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(u)
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	encoder.Encode(u)
 }
