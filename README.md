@@ -37,8 +37,10 @@
 
 ```bash
 git clone https://github.com/trauringetag/golang-rest-api.git
+```
 
 **1. Перейдите в папку с проектом:**
 
 ```bash
 cd golang-rest-api
+```
