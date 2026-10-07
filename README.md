@@ -23,3 +23,18 @@
 | [bcrypt](https://pkg.go.dev/golang.org/x/crypto/bcrypt) | Хэширование паролей |
 | [godotenv](https://github.com/joho/godotenv) | Загрузка переменных окружения |
 | Docker & Docker Compose | Контейнеризация |
+
+## 🚀 Быстрый старт
+
+### Предварительные требования
+
+- [Docker](https://www.docker.com/products/docker-desktop/) и Docker Compose
+- Go 1.22+ (опционально, для локальной разработки)
+
+### Установка и запуск
+
+**1. Склонируйте репозиторий:**
+
+```bash
+git clone https://github.com/trauringetag/golang-rest-api.git
+cd golang-rest-api
