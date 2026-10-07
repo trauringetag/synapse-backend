@@ -23,6 +23,7 @@ func NewAuthHandlers(userRepo repository.UserRepository) *AuthHandlers {
 }
 
 func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
+
 	var input struct {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
@@ -40,8 +41,8 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(input.Password) < 6 {
-		respondError(w, http.StatusBadRequest, "Пароль должен содержать минимум 6 символов")
+	if len(input.Password) < 8 {
+		respondError(w, http.StatusBadRequest, "Пароль должен содержать минимум 8 символов")
 		return
 	}
 
@@ -66,6 +67,7 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandlers) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
+
 	adminSecret := r.Header.Get("X-Admin-Secret")
 	expectedSecret := os.Getenv("ADMIN_SECRET_KEY")
 
@@ -91,8 +93,8 @@ func (h *AuthHandlers) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(input.Password) < 6 {
-		respondError(w, http.StatusBadRequest, "Пароль должен содержать минимум 6 символов")
+	if len(input.Password) < 8 {
+		respondError(w, http.StatusBadRequest, "Пароль должен содержать минимум 8 символов")
 		return
 	}
 
@@ -117,6 +119,7 @@ func (h *AuthHandlers) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
+
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`

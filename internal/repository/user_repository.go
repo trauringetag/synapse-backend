@@ -33,6 +33,7 @@ func NewUserRepository(db *pgxpool.Pool) UserRepository {
 }
 
 func (r *postgresUserRepository) GetAll(ctx context.Context) ([]User, error) {
+
 	query := `SELECT id, first_name, last_name, email, role FROM users ORDER BY id DESC LIMIT 50`
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
@@ -60,16 +61,21 @@ func (r *postgresUserRepository) GetAll(ctx context.Context) ([]User, error) {
 }
 
 func (r *postgresUserRepository) GetByID(ctx context.Context, id int) (*User, error) {
+
 	query := `SELECT id, first_name, last_name, email, role FROM users WHERE id = $1`
+
 	var u User
+
 	err := r.db.QueryRow(ctx, query, id).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Role)
 	if err != nil {
 		return nil, err
 	}
+
 	return &u, nil
 }
 
 func (r *postgresUserRepository) Create(ctx context.Context, u *User) error {
+
 	// Хэшируем пароль перед сохранением
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(u.PasswordHash), bcrypt.DefaultCost)
 	if err != nil {
@@ -89,24 +95,32 @@ func (r *postgresUserRepository) Create(ctx context.Context, u *User) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func (r *postgresUserRepository) Delete(ctx context.Context, id int) (bool, error) {
+
 	query := `DELETE FROM users WHERE id = $1`
+
 	result, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return false, err
 	}
+
 	return result.RowsAffected() > 0, nil
 }
 
 func (r *postgresUserRepository) FindByEmail(ctx context.Context, email string) (*User, error) {
+
 	query := `SELECT id, first_name, last_name, email, password_hash, role FROM users WHERE email = $1`
+
 	var u User
+
 	err := r.db.QueryRow(ctx, query, email).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.PasswordHash, &u.Role)
 	if err != nil {
 		return nil, err
 	}
+
 	return &u, nil
 }

@@ -25,6 +25,7 @@ func NewHandlers(userRepo repository.UserRepository) *Handlers {
 // --- Вспомогательные функции для унифицированных ответов ---
 
 func respondJSON(w http.ResponseWriter, status int, payload any) {
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 
@@ -43,6 +44,7 @@ func respondError(w http.ResponseWriter, status int, message string) {
 // --- HTTP Хендлеры ---
 
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
+
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil {
 		respondError(w, http.StatusUnauthorized, "Не удалось получить данные пользователя из токена")
@@ -74,6 +76,7 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
+
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil || claims.Role != "admin" {
 		respondError(w, http.StatusForbidden, "Только администратор может создавать пользователей")
@@ -100,6 +103,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteUser(w http.ResponseWriter, r *http.Request) {
+
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil || claims.Role != "admin" {
 		respondError(w, http.StatusForbidden, "Только администратор может удалять пользователей")

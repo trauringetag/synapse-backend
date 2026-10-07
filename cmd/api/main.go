@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("️ Файл .env не найден, используем переменные окружения ОС")
+		log.Println("️Файл .env не найден, используем переменные окружения ОС")
 	}
 
 	connString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
@@ -29,12 +29,12 @@ func main() {
 
 	pool, err := database.NewPool(connString)
 	if err != nil {
-		log.Fatalf("❌ Ошибка подключения к БД: %v", err)
+		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
 	defer pool.Close()
 
 	if err := database.RunMigrations(pool); err != nil {
-		log.Fatalf("❌ Ошибка применения миграций: %v", err)
+		log.Fatalf("Ошибка применения миграций: %v", err)
 	}
 
 	userRepo := repository.NewUserRepository(pool)
@@ -44,7 +44,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// 1. Публичные эндпоинты (без защиты)
+	// Публичные эндпоинты (без защиты)
 	mux.HandleFunc("POST /auth/register", authHandlers.Register)
 	mux.HandleFunc("POST /auth/login", authHandlers.Login)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -53,10 +53,10 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// 2. Создание админа — защищено секретным ключом из .env (не JWT)
+	// Создание админа — защищено секретным ключом из .env (не JWT)
 	mux.HandleFunc("POST /auth/register-admin", authHandlers.RegisterAdmin)
 
-	// 3. Защищённые эндпоинты (требуют JWT)
+	// Защищённые эндпоинты (требуют JWT)
 	protectedMux := http.NewServeMux()
 	protectedMux.HandleFunc("GET /users", h.GetUsers)
 	protectedMux.HandleFunc("POST /users", h.CreateUser)
@@ -69,8 +69,8 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf(" Сервер успешно запущен и слушает порт :%s", port)
+	log.Printf("Сервер успешно запущен: http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatalf("💥 Сервер упал: %v", err)
+		log.Fatalf("Сервер упал: %v", err)
 	}
 }
