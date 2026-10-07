@@ -59,3 +59,17 @@ DB_PORT=5432
 JWT_SECRET=your-super-secret-key-change-this-in-production-min-32-chars
 JWT_EXPIRATION_HOURS=24
 ```
+
+Важно: Обязательно замените JWT_SECRET на случайную строку длиной минимум 32 символа в продакшене!
+
+**4. Запустите проект:**
+
+```bash
+docker-compose up --build
+```
+
+**5. Проверьте работоспособность:**
+
+```bash
+curl http://localhost:8080/health
+```
