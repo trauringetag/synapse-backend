@@ -73,3 +73,10 @@ docker-compose up --build
 ```bash
 curl http://localhost:8080/health
 ```
+
+Должен вернуть: OK
+API будет доступен по адресу: http://localhost:8080
+
+```bash
+http://localhost:8080
+```
