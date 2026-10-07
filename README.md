@@ -75,3 +75,11 @@ curl http://localhost:8080/health
 ```
 
 API будет доступен по адресу: http://localhost:8080
+
+## 📚 API Документация
+
+### Базовая информация
+
+- Base URL: http://localhost:8080
+- Content-Type: application/json; charset=utf-8
+- Аутентификация: JWT Bearer Token в заголовке Authorization: Bearer <token>
