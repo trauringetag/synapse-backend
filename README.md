@@ -68,13 +68,13 @@ JWT_EXPIRATION_HOURS=24
 docker-compose up --build
 ```
 
-**5. Проверьте работоспособность (Корректный результат выполнения: «OK»):**
+**5. Проверьте работоспособность:**
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-API будет доступен по адресу: http://localhost:8080
+Корректный результат выполнения: «OK»
 
 ## 📚 API Документация
 
@@ -83,3 +83,31 @@ API будет доступен по адресу: http://localhost:8080
 - Base URL: http://localhost:8080
 - Content-Type: application/json; charset=utf-8
 - Аутентификация: JWT Bearer Token в заголовке «Authorization: Bearer ЗДЕСЬ_ВАШ_ТОКЕН»
+
+### Публичные эндпоинты (без токена)
+
+1. Регистрация пользователя
+POST /auth/register
+Создает нового пользователя. Если роль не указана, по умолчанию назначается user.
+
+Запрос:
+
+```bash
+{
+  "first_name": "Иван",
+  "last_name": "Иванов",
+  "email": "ivan@example.com",
+  "password": "securePassword123",
+  "role": "admin"
+}
+```
+
+Успешный ответ (201 Created):
+
+```bash
+{
+  "message": "Пользователь успешно зарегистрирован",
+  "user_id": 1,
+  "role": "admin"
+}
+```
