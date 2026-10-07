@@ -109,3 +109,7 @@ curl http://localhost:8080/health
       "user_id": 1,
       "role": "admin"
     }
+
+**Ошибки:**
+
+400 Bad Request — невалидный JSON, пустые поля, пароль < 6 символов, неверная роль
