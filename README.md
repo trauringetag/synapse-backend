@@ -60,7 +60,7 @@ JWT_SECRET=your-super-secret-key-change-this-in-production-min-32-chars
 JWT_EXPIRATION_HOURS=24
 ```
 
-Важно: Обязательно замените JWT_SECRET на случайную строку длиной минимум 32 символа в продакшене!
+Обязательно замените JWT_SECRET на случайную строку длиной минимум 32 символа в продакшене!
 
 **4. Запустите проект:**
 
