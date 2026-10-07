@@ -68,7 +68,7 @@ JWT_EXPIRATION_HOURS=24
 docker-compose up --build
 ```
 
-**5. Проверьте работоспособность (Корректный результат выполнения: OK):**
+**5. Проверьте работоспособность (Корректный результат выполнения: «OK»):**
 
 ```bash
 curl http://localhost:8080/health
@@ -82,4 +82,4 @@ API будет доступен по адресу: http://localhost:8080
 
 - Base URL: http://localhost:8080
 - Content-Type: application/json; charset=utf-8
-- Аутентификация: JWT Bearer Token в заголовке Authorization: Bearer <token>
+- Аутентификация: JWT Bearer Token в заголовке «Authorization: Bearer ЗДЕСЬ_ВАШ_ТОКЕН»
