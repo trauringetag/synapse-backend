@@ -234,17 +234,4 @@ curl http://localhost:8080/health
 
 ## Архитектура
 
-graph TD
-    HTTP["🌐 HTTP Layer<br/><b>(handlers)</b>"] --> MW["🛡️ Middleware<br/><b>(JWT auth)</b>"]
-    MW --> Repo["📦 Repository<br/><b>(repository)</b>"]
-    Repo --> DB[("🗄️ Database<br/><b>(PostgreSQL)</b>")]
-
-    DB -->|Data| Repo
-    Repo -->|Data| MW
-    MW -->|Response| HTTP
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1;
-    classDef db fill:#fff8e1,stroke:#ff8f00,stroke-width:2px,color:#e65100;
-    
-    class HTTP,MW,Repo app;
-    class DB db;
+<img width="487" height="211" alt="image" src="https://github.com/user-attachments/assets/53908e42-de9f-4a99-a9a5-3c9104a40b26" />
