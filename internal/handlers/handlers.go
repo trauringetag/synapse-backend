@@ -9,9 +9,10 @@ import (
 )
 
 type User struct {
-	ID    int    `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
+	ID        int    `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
 }
 
 type Handlers struct {
@@ -19,7 +20,7 @@ type Handlers struct {
 }
 
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.Query(context.Background(), "SELECT id, name, email FROM users ORDER BY id DESC LIMIT 50")
+	rows, err := h.DB.Query(context.Background(), "SELECT id, first_name, last_name, email FROM users ORDER BY id DESC LIMIT 50")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -29,13 +30,14 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Name, &u.Email); err != nil {
+		if err := rows.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		users = append(users, u)
 	}
 
+	// Пока что оставил заголовки в коде, далее нужно передавать вместе с запросом
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	encoder := json.NewEncoder(w)
 	encoder.SetEscapeHTML(false)
@@ -51,8 +53,8 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	err := h.DB.QueryRow(
 		context.Background(),
-		"INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
-		u.Name, u.Email,
+		"INSERT INTO users (first_name, last_name, email) VALUES ($1, $2, $3) RETURNING id",
+		u.FirstName, u.LastName, u.Email,
 	).Scan(&u.ID)
 
 	if err != nil {
@@ -60,6 +62,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Пока что оставил заголовки в коде, далее нужно передавать вместе с запросом
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	encoder := json.NewEncoder(w)
