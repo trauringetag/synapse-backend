@@ -44,35 +44,31 @@ func respondError(w http.ResponseWriter, status int, message string) {
 // --- HTTP Хендлеры ---
 
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
-
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil {
 		respondError(w, http.StatusUnauthorized, "Не удалось получить данные пользователя из токена")
 		return
 	}
 
-	var users []repository.User
-	var err error
-
+	// Если админ — возвращаем массив всех пользователей
 	if claims.Role == "admin" {
-		// Админ видит всех
-		users, err = h.userRepo.GetAll(r.Context())
-	} else {
-		// Обычный пользователь видит только себя
-		user, err := h.userRepo.GetByID(r.Context(), claims.UserID)
+		users, err := h.userRepo.GetAll(r.Context())
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Ошибка при получении данных пользователя")
+			respondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка пользователей")
 			return
 		}
-		users = []repository.User{*user}
-	}
-
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка пользователей")
+		respondJSON(w, http.StatusOK, users)
 		return
 	}
 
-	respondJSON(w, http.StatusOK, users)
+	// Если обычный пользователь — возвращаем один объект (его данные)
+	user, err := h.userRepo.GetByID(r.Context(), claims.UserID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Ошибка при получении данных пользователя")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, user)
 }
 
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
