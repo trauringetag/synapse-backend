@@ -39,8 +39,23 @@
 git clone https://github.com/trauringetag/golang-rest-api.git
 ```
 
-**1. Перейдите в папку с проектом:**
+**2. Перейдите в папку с проектом:**
 
 ```bash
 cd golang-rest-api
+```
+
+**3. Создайте файл .env в корне проекта (или отредактируйте существующий):**
+
+```bash
+APP_PORT=8080
+
+POSTGRES_USER=app_user
+POSTGRES_PASSWORD=secret_password
+POSTGRES_DB=app_db
+DB_HOST=db
+DB_PORT=5432
+
+JWT_SECRET=your-super-secret-key-change-this-in-production-min-32-chars
+JWT_EXPIRATION_HOURS=24
 ```
