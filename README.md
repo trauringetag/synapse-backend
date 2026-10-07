@@ -94,22 +94,18 @@ curl http://localhost:8080/health
 
 **Запрос:**
 
-```bash
-{
-  "first_name": "Иван",
-  "last_name": "Иванов",
-  "email": "ivan@example.com",
-  "password": "securePassword123",
-  "role": "admin"
-}
-```
+    {
+      "first_name": "Иван",
+      "last_name": "Иванов",
+      "email": "ivan@example.com",
+      "password": "securePassword123",
+      "role": "admin"
+    }
 
 **Успешный ответ (201 Created):**
 
-```bash
-{
-  "message": "Пользователь успешно зарегистрирован",
-  "user_id": 1,
-  "role": "admin"
-}
-```
+    {
+      "message": "Пользователь успешно зарегистрирован",
+      "user_id": 1,
+      "role": "admin"
+    }
