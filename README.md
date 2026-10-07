@@ -56,8 +56,10 @@ POSTGRES_DB=app_db
 DB_HOST=db
 DB_PORT=5432
 
-JWT_SECRET=your-super-secret-key-change-this-in-production-min-32-chars
+JWT_SECRET=super-secret-key-change-this-in-production-min-32-chars
 JWT_EXPIRATION_HOURS=24
+
+ADMIN_SECRET_KEY=super-secret-admin-key-change-in-production
 ```
 
 Обязательно замените JWT_SECRET на случайную строку длиной минимум 32 символа в продакшене!
@@ -90,7 +92,7 @@ curl http://localhost:8080/health
     
     POST /auth/register
 
-Создает нового пользователя. Если роль не указана, по умолчанию назначается user.
+Создает нового пользователя. Поле role в теле запроса намеренно игнорируется в целях безопасности. Любой пользователь, зарегистрированный через этот эндпоинт, получит роль user.
 
 **Запрос:**
 
@@ -99,7 +101,7 @@ curl http://localhost:8080/health
       "last_name": "Иванов",
       "email": "ivan@example.com",
       "password": "securePassword123",
-      "role": "admin"
+      "role": "user"
     }
 
 **Успешный ответ (201 Created):**
@@ -107,18 +109,50 @@ curl http://localhost:8080/health
     {
       "message": "Пользователь успешно зарегистрирован",
       "user_id": 1,
+      "role": "user"
+    }
+
+**Ошибки:**
+
+- 400 Bad Request — невалидный JSON, пустые поля или пароль менее 6 символов.
+
+#### 2. Регистрация администратора (Требует секретный ключ)
+    
+    POST /auth/register-admin
+
+Создает пользователя с ролью admin. Эндпоинт защищен проверкой секретного ключа, который должен совпадать со значением ADMIN_SECRET_KEY в файле .env.
+
+**Заголовки:**
+
+    X-Admin-Secret: super-secret-admin-key-change-in-production
+    Content-Type: application/json
+
+**Запрос:**
+
+    {
+      "first_name": "Админ",
+      "last_name": "Системы",
+      "email": "admin@example.com",
+      "password": "secureAdminPassword123"
+    }
+
+**Успешный ответ (201 Created):**
+
+    {
+      "message": "Администратор успешно зарегистрирован",
+      "user_id": 2,
       "role": "admin"
     }
 
 **Ошибки:**
 
-- 400 Bad Request — невалидный JSON, пустые поля, пароль < 6 символов, неверная роль
+- 403 Forbidden — заголовок X-Admin-Secret отсутствует или не совпадает с ключом в .env.
 
-#### 2. Вход в систему (получение токена)
+#### 3. Вход в систему (получение токена)
     
     POST /auth/login
 
-Создает нового пользователя. Если роль не указана, по умолчанию назначается user.
+Аутентифицирует пользователя по email и паролю, возвращая JWT-токен и роль пользователя.
 
 **Запрос:**
 
@@ -130,13 +164,13 @@ curl http://localhost:8080/health
 **Успешный ответ (200 OK):**
 
     {
-      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "token": "ТУТ_СГЕНЕРИРОВАННЫЙ_ТОКЕН",
       "role": "admin"
     }
 
 **Ошибки:**
 
-- 401 Unauthorized — неверный email или пароль
+- 401 Unauthorized — неверный email или пароль.
 
 ### Защищенные эндпоинты (требуют JWT)
 
@@ -150,35 +184,37 @@ curl http://localhost:8080/health
 
 **Логика доступа:**
 
-- Admin — видит всех пользователей (до 50)
-- User — видит только свои данные
+- Admin — видит массив всех пользователей (до 50).
+- User — видит массив, содержащий только свои данные.
 
-**Успешный ответ (200 OK):**
+**Успешный ответ для Admin (200 OK):**
 
     [
       {
         "id": 2,
-        "first_name": "Иван",
-        "last_name": "Иванов",
-        "email": "ivan@example.com",
-        "role": "user"
-      },
-      {
-        "id": 1,
         "first_name": "Админ",
         "last_name": "Системы",
         "email": "admin@example.com",
         "role": "admin"
+      },
+      {
+        "id": 1,
+        "first_name": "Иван",
+        "last_name": "Иванов",
+        "email": "ivan@example.com",
+        "role": "user"
       }
     ]
 
 **Ошибки:**
 
-- 401 Unauthorized — токен отсутствует или недействителен
+- 401 Unauthorized — токен отсутствует, просрочен или недействителен.
 
 #### 4. Создание пользователя (только Admin)
     
     POST /users
+
+Позволяет администратору создать нового пользователя (например, для внутреннего управления).
 
 **Запрос:**
 
@@ -201,8 +237,8 @@ curl http://localhost:8080/health
 
 **Ошибки:**
 
-- 403 Forbidden — у пользователя нет прав администратора
-- 400 Bad Request — невалидные данные или email уже существует
+- 403 Forbidden — у пользователя нет прав администратора.
+- 400 Bad Request — невалидные данные или email уже существует.
 
 #### 5. Удаление пользователя (только Admin)
     
@@ -218,9 +254,9 @@ curl http://localhost:8080/health
 
 **Ошибки:**
 
-- 400 Bad Request — админ пытается удалить сам себя
-- 403 Forbidden — у пользователя нет прав администратора
-- 404 Not Found — пользователь с таким ID не найден
+- 400 Bad Request — админ пытается удалить свой собственный аккаунт.
+- 403 Forbidden — у пользователя нет прав администратора.
+- 404 Not Found — пользователь с таким ID не найден.
 
 ### Системные эндпоинты
     
@@ -231,3 +267,26 @@ curl http://localhost:8080/health
 **Ответ (200 OK):**
 
     OK
+
+## Архитектура
+
+<img width="487" height="211" alt="image" src="https://github.com/user-attachments/assets/53908e42-de9f-4a99-a9a5-3c9104a40b26" />
+
+## Безопасность
+
+- Пароли хэшируются алгоритмом bcrypt с cost factor 10
+- JWT-токены подписаны секретным ключом (HS256)
+- Токены имеют срок действия (настраивается через JWT_EXPIRATION_HOURS)
+- Поле password_hash никогда не возвращается в API-ответах (тег json:"-")
+- SQL-инъекции предотвращены через параметризованные запросы pgx
+- Валидация входных данных на уровне приложения
+
+## Планы развития
+
+- Добавить refresh tokens для обновления сессий без повторного логина
+- Реализовать эндпоинт PUT /users/{id} для обновления данных
+- Добавить пагинацию и фильтрацию в GET /users
+- Интегрировать логгер (slog / zap)
+- Написать юнит-тесты с моками репозитория
+- Добавить rate limiting
+- Настроить CI/CD через GitHub Actions
