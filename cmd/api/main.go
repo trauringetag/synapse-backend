@@ -14,6 +14,21 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// corsMiddleware разрешает запросы с фронтенда
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173") // Адрес Vite по умолчанию
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Secret")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("️Файл .env не найден, используем переменные окружения ОС")
@@ -70,7 +85,7 @@ func main() {
 	}
 
 	log.Printf("Сервер успешно запущен: http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatalf("Сервер упал: %v", err)
+	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil {
+		log.Fatalf("💥 Сервер упал: %v", err)
 	}
 }
