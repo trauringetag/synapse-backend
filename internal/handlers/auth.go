@@ -171,5 +171,10 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"token": tokenString,
 		"role":  user.Role,
+		"user": map[string]interface{}{
+			"first_name": user.FirstName,
+			"last_name":  user.LastName,
+			"email":      user.Email,
+		},
 	})
 }
