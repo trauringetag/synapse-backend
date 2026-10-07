@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"os"
 
-	"golang-rest-api/internal/database"
-	"golang-rest-api/internal/handlers"
-	"golang-rest-api/internal/middleware"
-	"golang-rest-api/internal/repository"
+	"synapse-backend/internal/database"
+	"synapse-backend/internal/handlers"
+	"synapse-backend/internal/middleware"
+	"synapse-backend/internal/repository"
 
 	"github.com/joho/godotenv"
 )

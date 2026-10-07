@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"golang-rest-api/internal/middleware"
-	"golang-rest-api/internal/repository"
+	"synapse-backend/internal/middleware"
+	"synapse-backend/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"

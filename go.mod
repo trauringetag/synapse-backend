@@ -1,4 +1,4 @@
-module golang-rest-api
+module synapse-backend
 
 go 1.26.0
 

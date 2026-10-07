@@ -36,13 +36,13 @@
 **1. Склонируйте репозиторий:**
 
 ```bash
-git clone https://github.com/trauringetag/golang-rest-api.git
+git clone https://github.com/trauringetag/synapse-backend.git
 ```
 
 **2. Перейдите в папку с проектом:**
 
 ```bash
-cd golang-rest-api
+cd synapse-backend
 ```
 
 **3. Создайте файл .env в корне проекта (или отредактируйте существующий):**

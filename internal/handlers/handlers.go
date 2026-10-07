@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"golang-rest-api/internal/middleware"
-	"golang-rest-api/internal/repository"
+	"synapse-backend/internal/middleware"
+	"synapse-backend/internal/repository"
 )
 
 // Handlers хранит зависимости, необходимые для обработки HTTP-запросов.
