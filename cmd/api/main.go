@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️ Файл .env не найден, используем переменные окружения ОС")
+		log.Println("️ Файл .env не найден, используем переменные окружения ОС")
 	}
 
 	connString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
@@ -53,13 +53,15 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// 2. Защищенные эндпоинты (требуют JWT)
+	// 2. Создание админа — защищено секретным ключом из .env (не JWT)
+	mux.HandleFunc("POST /auth/register-admin", authHandlers.RegisterAdmin)
+
+	// 3. Защищённые эндпоинты (требуют JWT)
 	protectedMux := http.NewServeMux()
 	protectedMux.HandleFunc("GET /users", h.GetUsers)
 	protectedMux.HandleFunc("POST /users", h.CreateUser)
 	protectedMux.HandleFunc("DELETE /users/{id}", h.DeleteUser)
 
-	// Оборачиваем все защищенные роуты в middleware проверки токена
 	mux.Handle("/", middleware.JWTMiddleware(protectedMux))
 
 	port := os.Getenv("APP_PORT")
@@ -67,7 +69,7 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("🚀 Сервер успешно запущен и слушает порт :%s", port)
+	log.Printf(" Сервер успешно запущен и слушает порт :%s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		log.Fatalf("💥 Сервер упал: %v", err)
 	}

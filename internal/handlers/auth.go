@@ -28,7 +28,6 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 		LastName  string `json:"last_name"`
 		Email     string `json:"email"`
 		Password  string `json:"password"`
-		Role      string `json:"role"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -46,17 +45,12 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if input.Role != "" && input.Role != "admin" && input.Role != "user" {
-		respondError(w, http.StatusBadRequest, "Роль должна быть 'admin' или 'user'")
-		return
-	}
-
 	user := &repository.User{
 		FirstName:    input.FirstName,
 		LastName:     input.LastName,
 		Email:        input.Email,
-		PasswordHash: input.Password, // Репозиторий сам захэширует
-		Role:         input.Role,
+		PasswordHash: input.Password,
+		Role:         "user",
 	}
 
 	if err := h.userRepo.Create(r.Context(), user); err != nil {
@@ -66,6 +60,57 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Пользователь успешно зарегистрирован",
+		"user_id": user.ID,
+		"role":    user.Role,
+	})
+}
+
+func (h *AuthHandlers) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
+	adminSecret := r.Header.Get("X-Admin-Secret")
+	expectedSecret := os.Getenv("ADMIN_SECRET_KEY")
+
+	if adminSecret == "" || expectedSecret == "" || adminSecret != expectedSecret {
+		respondError(w, http.StatusForbidden, "Неверный или отсутствующий секретный ключ администратора")
+		return
+	}
+
+	var input struct {
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Email     string `json:"email"`
+		Password  string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		respondError(w, http.StatusBadRequest, "Неверный формат JSON")
+		return
+	}
+
+	if input.FirstName == "" || input.LastName == "" || input.Email == "" || input.Password == "" {
+		respondError(w, http.StatusBadRequest, "Все поля обязательны для заполнения")
+		return
+	}
+
+	if len(input.Password) < 6 {
+		respondError(w, http.StatusBadRequest, "Пароль должен содержать минимум 6 символов")
+		return
+	}
+
+	user := &repository.User{
+		FirstName:    input.FirstName,
+		LastName:     input.LastName,
+		Email:        input.Email,
+		PasswordHash: input.Password,
+		Role:         "admin",
+	}
+
+	if err := h.userRepo.Create(r.Context(), user); err != nil {
+		respondError(w, http.StatusBadRequest, "Ошибка при регистрации администратора. Возможно, email уже используется")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]interface{}{
+		"message": "Администратор успешно зарегистрирован",
 		"user_id": user.ID,
 		"role":    user.Role,
 	})
