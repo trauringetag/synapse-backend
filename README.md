@@ -157,20 +157,20 @@ curl http://localhost:8080/health
 **Запрос:**
 
     {
-      "email": "ivan@example.com",
+      "email": "super_admin@example.com",
       "password": "securePassword123"
     }
 
 **Успешный ответ (200 OK):**
 
     {
-      "role": "admin",
+      "role": "user",
       "token": "ТУТ_СГЕНЕРИРОВАННЫЙ_ТОКЕН",
       "user": {
         "email": "super_admin@example.com",
-        "first_name": "Super",
-        "id": 15,
-        "last_name": "Admin"
+        "first_name": "Имя",
+        "id": 1,
+        "last_name": "Фамилия"
       }
     }
 
