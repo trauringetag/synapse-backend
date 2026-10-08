@@ -108,8 +108,8 @@ curl http://localhost:8080/health
 
     {
       "message": "Пользователь успешно зарегистрирован",
-      "user_id": 1,
-      "role": "user"
+      "role": "user",
+      "user_id": 1
     }
 
 **Ошибки:**
