@@ -212,6 +212,16 @@ curl http://localhost:8080/health
       }
     ]
 
+**Успешный ответ для User (200 OK):**
+
+    {
+      "id": 1,
+      "first_name": "Имя",
+      "last_name": "Фамилия",
+      "email": "template_user@example.com",
+      "role": "user"
+    }
+
 **Ошибки:**
 
 - 401 Unauthorized — токен отсутствует, просрочен или недействителен.
