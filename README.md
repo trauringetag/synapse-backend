@@ -164,8 +164,14 @@ curl http://localhost:8080/health
 **Успешный ответ (200 OK):**
 
     {
+      "role": "admin",
       "token": "ТУТ_СГЕНЕРИРОВАННЫЙ_ТОКЕН",
-      "role": "admin"
+      "user": {
+        "email": "super_admin@example.com",
+        "first_name": "Super",
+        "id": 15,
+        "last_name": "Admin"
+      }
     }
 
 **Ошибки:**
