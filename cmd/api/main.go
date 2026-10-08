@@ -86,6 +86,6 @@ func main() {
 
 	log.Printf("Сервер успешно запущен: http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil {
-		log.Fatalf("💥 Сервер упал: %v", err)
+		log.Fatalf("Сервер упал: %v", err)
 	}
 }
