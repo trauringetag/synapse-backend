@@ -140,8 +140,8 @@ curl http://localhost:8080/health
 
     {
       "message": "Администратор успешно зарегистрирован",
-      "user_id": 2,
-      "role": "admin"
+      "role": "admin",
+      "user_id": 1
     }
 
 **Ошибки:**
