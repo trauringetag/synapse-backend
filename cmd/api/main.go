@@ -68,11 +68,10 @@ func main() {
 	h := handlers.NewHandlers(userRepo)
 	authHandlers := handlers.NewAuthHandlers(userRepo)
 
-	// Функция проверки версии токена: сверяет версию из JWT с актуальной в БД
 	checkTokenVersion := func(ctx context.Context, userID int, version int) bool {
 		currentVersion, err := userRepo.GetTokenVersion(ctx, userID)
 		if err != nil {
-			return false // Пользователь не найден или ошибка БД
+			return false
 		}
 		return currentVersion == version
 	}
@@ -95,9 +94,9 @@ func main() {
 	protectedMux.HandleFunc("GET /users", h.GetUsers)
 	protectedMux.HandleFunc("POST /users", h.CreateUser)
 	protectedMux.HandleFunc("DELETE /users/{id}", h.DeleteUser)
+	protectedMux.HandleFunc("GET /users/me", h.GetMe)
 	protectedMux.HandleFunc("POST /auth/logout", authHandlers.Logout)
 
-	// Передаём функцию проверки версии в middleware
 	mux.Handle("/", middleware.JWTMiddleware(protectedMux, checkTokenVersion))
 
 	port := os.Getenv("APP_PORT")

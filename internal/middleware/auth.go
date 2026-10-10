@@ -31,7 +31,6 @@ func InitJWT() {
 	JWTSecret = []byte(secret)
 }
 
-// TokenVersionChecker — функция, которая проверяет, актуальна ли версия токена
 type TokenVersionChecker func(ctx context.Context, userID int, version int) bool
 
 func JWTMiddleware(next http.Handler, checkVersion TokenVersionChecker) http.Handler {

@@ -14,7 +14,9 @@ type Handlers struct {
 }
 
 func NewHandlers(userRepo repository.UserRepository) *Handlers {
-	return &Handlers{userRepo: userRepo}
+	return &Handlers{
+		userRepo: userRepo,
+	}
 }
 
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
@@ -24,13 +26,23 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.Role == "admin" {
-		users, err := h.userRepo.GetAll(r.Context())
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка пользователей")
-			return
-		}
-		respondJSON(w, http.StatusOK, users)
+	if claims.Role != "admin" {
+		respondError(w, http.StatusForbidden, "Доступ запрещен: только для администраторов")
+		return
+	}
+
+	users, err := h.userRepo.GetAll(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Ошибка сервера при получении списка пользователей")
+		return
+	}
+	respondJSON(w, http.StatusOK, users)
+}
+
+func (h *Handlers) GetMe(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaimsFromContext(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "Не удалось получить данные пользователя из токена")
 		return
 	}
 

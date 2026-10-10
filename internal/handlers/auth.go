@@ -15,8 +15,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// --- Вспомогательные функции для ответов (теперь они общие для всего пакета handlers) ---
-
 func respondError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
@@ -29,7 +27,32 @@ func respondJSON(w http.ResponseWriter, code int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// --- AuthHandlers ---
+func setRefreshTokenCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+	isSecure := os.Getenv("COOKIE_SECURE") == "true"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    token,
+		Expires:  expiresAt,
+		Path:     "/",
+		HttpOnly: true, // Запрещает доступ через JavaScript (защита от XSS)
+		Secure:   isSecure, // Требует HTTPS (включайте true в .env для продакшена)
+		SameSite: http.SameSiteStrictMode, // Защита от CSRF-атак
+	})
+}
+
+func clearRefreshTokenCookie(w http.ResponseWriter) {
+	isSecure := os.Getenv("COOKIE_SECURE") == "true"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0), // Мгновенное истечение срока действия
+		MaxAge:   -1,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
 
 type AuthHandlers struct {
 	userRepo repository.UserRepository
@@ -48,7 +71,6 @@ func generateRefreshToken() (string, error) {
 }
 
 func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
-	
 	var input struct {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
@@ -172,7 +194,12 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Access Token (15 минут) — вшиваем token_version
+	user.TokenVersion++
+	if err := h.userRepo.IncrementTokenVersion(r.Context(), user.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "Ошибка сервера при обновлении сессии")
+		return
+	}
+
 	accessClaims := &middleware.Claims{
 		UserID:       user.ID,
 		Email:        user.Email,
@@ -190,7 +217,6 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Refresh Token (7 дней)
 	refreshTokenStr, err := generateRefreshToken()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Ошибка при создании токена обновления")
@@ -202,10 +228,11 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRefreshTokenCookie(w, refreshTokenStr, refreshExpiresAt)
+
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"access_token":  accessTokenString,
-		"refresh_token": refreshTokenStr,
-		"role":          user.Role,
+		"access_token": accessTokenString,
+		"role":         user.Role,
 		"user": map[string]interface{}{
 			"id":         user.ID,
 			"first_name": user.FirstName,
@@ -216,19 +243,14 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		respondError(w, http.StatusBadRequest, "Неверный формат JSON")
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil || cookie.Value == "" {
+		respondError(w, http.StatusUnauthorized, "Токен обновления отсутствует")
 		return
 	}
-	if input.RefreshToken == "" {
-		respondError(w, http.StatusBadRequest, "Токен обновления обязателен")
-		return
-	}
+	refreshTokenStr := cookie.Value
 
-	user, err := h.userRepo.FindByRefreshToken(r.Context(), input.RefreshToken)
+	user, err := h.userRepo.FindByRefreshToken(r.Context(), refreshTokenStr)
 	if err != nil {
 		respondError(w, http.StatusUnauthorized, "Недействительный токен обновления")
 		return
@@ -238,7 +260,6 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rotation
 	newRefreshTokenStr, err := generateRefreshToken()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Ошибка при создании токена обновления")
@@ -250,7 +271,8 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Новый access token с актуальной token_version
+	setRefreshTokenCookie(w, newRefreshTokenStr, newRefreshExpiresAt)
+
 	accessClaims := &middleware.Claims{
 		UserID:       user.ID,
 		Email:        user.Email,
@@ -269,8 +291,7 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"access_token":  accessTokenString,
-		"refresh_token": newRefreshTokenStr,
+		"access_token": accessTokenString,
 	})
 }
 
@@ -281,17 +302,17 @@ func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Очищаем refresh token
 	if err := h.userRepo.ClearRefreshToken(r.Context(), claims.UserID); err != nil {
 		respondError(w, http.StatusInternalServerError, "Ошибка сервера при выходе из системы")
 		return
 	}
 
-	// 2. Инкрементируем token_version — все ранее выданные access токены мгновенно становятся недействительными
 	if err := h.userRepo.IncrementTokenVersion(r.Context(), claims.UserID); err != nil {
 		respondError(w, http.StatusInternalServerError, "Ошибка сервера при выходе из системы")
 		return
 	}
+
+	clearRefreshTokenCookie(w)
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "Успешный выход из системы"})
 }
