@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	
 	"fmt"
 	"log"
 	"net/http"
@@ -14,13 +16,21 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// corsMiddleware разрешает запросы с фронтенда
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173") // Адрес Vite по умолчанию
+		origin := r.Header.Get("Origin")
+		allowedOrigins := map[string]bool{
+			"http://localhost:5173": true,
+			"http://localhost:3000": true,
+		}
+		allowOrigin := "http://localhost:5173"
+		if allowedOrigins[origin] {
+			allowOrigin = origin
+		}
+		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Secret")
-
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -31,8 +41,10 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("️Файл .env не найден, используем переменные окружения ОС")
+		log.Println("Файл .env не найден, используем переменные окружения ОС")
 	}
+
+	middleware.InitJWT()
 
 	connString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		os.Getenv("POSTGRES_USER"),
@@ -53,31 +65,40 @@ func main() {
 	}
 
 	userRepo := repository.NewUserRepository(pool)
-
 	h := handlers.NewHandlers(userRepo)
 	authHandlers := handlers.NewAuthHandlers(userRepo)
 
-	mux := http.NewServeMux()
+	// Функция проверки версии токена: сверяет версию из JWT с актуальной в БД
+	checkTokenVersion := func(ctx context.Context, userID int, version int) bool {
+		currentVersion, err := userRepo.GetTokenVersion(ctx, userID)
+		if err != nil {
+			return false // Пользователь не найден или ошибка БД
+		}
+		return currentVersion == version
+	}
 
-	// Публичные эндпоинты (без защиты)
+	mux := http.NewServeMux()
+	
+	// Публичные эндпоинты
 	mux.HandleFunc("POST /auth/register", authHandlers.Register)
 	mux.HandleFunc("POST /auth/login", authHandlers.Login)
+	mux.HandleFunc("POST /auth/refresh", authHandlers.Refresh)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
-
-	// Создание админа — защищено секретным ключом из .env (не JWT)
 	mux.HandleFunc("POST /auth/register-admin", authHandlers.RegisterAdmin)
 
-	// Защищённые эндпоинты (требуют JWT)
+	// Защищённые эндпоинты
 	protectedMux := http.NewServeMux()
 	protectedMux.HandleFunc("GET /users", h.GetUsers)
 	protectedMux.HandleFunc("POST /users", h.CreateUser)
 	protectedMux.HandleFunc("DELETE /users/{id}", h.DeleteUser)
+	protectedMux.HandleFunc("POST /auth/logout", authHandlers.Logout)
 
-	mux.Handle("/", middleware.JWTMiddleware(protectedMux))
+	// Передаём функцию проверки версии в middleware
+	mux.Handle("/", middleware.JWTMiddleware(protectedMux, checkTokenVersion))
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {
@@ -85,6 +106,7 @@ func main() {
 	}
 
 	log.Printf("Сервер успешно запущен: http://localhost:%s", port)
+
 	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil {
 		log.Fatalf("Сервер упал: %v", err)
 	}

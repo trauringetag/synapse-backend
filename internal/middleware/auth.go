@@ -14,13 +14,27 @@ type contextKey string
 const UserClaimsKey contextKey = "user_claims"
 
 type Claims struct {
-	UserID int    `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID       int    `json:"user_id"`
+	Email        string `json:"email"`
+	Role         string `json:"role"`
+	TokenVersion int    `json:"token_version"`
 	jwt.RegisteredClaims
 }
 
-func JWTMiddleware(next http.Handler) http.Handler {
+var JWTSecret []byte
+
+func InitJWT() {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "super-secret-key-change-this-in-production-min-32-chars"
+	}
+	JWTSecret = []byte(secret)
+}
+
+// TokenVersionChecker — функция, которая проверяет, актуальна ли версия токена
+type TokenVersionChecker func(ctx context.Context, userID int, version int) bool
+
+func JWTMiddleware(next http.Handler, checkVersion TokenVersionChecker) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -38,11 +52,20 @@ func JWTMiddleware(next http.Handler) http.Handler {
 		claims := &Claims{}
 
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(os.Getenv("JWT_SECRET")), nil
-		})
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return JWTSecret, nil
+		}, jwt.WithExpirationRequired())
 
 		if err != nil || !token.Valid {
 			http.Error(w, `{"error": "Недействительный или просроченный токен"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Проверка версии токена (защита от использования отозванного токена)
+		if checkVersion != nil && !checkVersion(r.Context(), claims.UserID, claims.TokenVersion) {
+			http.Error(w, `{"error": "Сессия завершена, выполните вход заново"}`, http.StatusUnauthorized)
 			return
 		}
 

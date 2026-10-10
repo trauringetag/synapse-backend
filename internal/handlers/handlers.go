@@ -9,39 +9,13 @@ import (
 	"synapse-backend/internal/repository"
 )
 
-// Handlers хранит зависимости, необходимые для обработки HTTP-запросов.
-// Зависит от интерфейса, а не от конкретной реализации БД.
 type Handlers struct {
 	userRepo repository.UserRepository
 }
 
-// NewHandlers создает новый экземпляр хендлеров
 func NewHandlers(userRepo repository.UserRepository) *Handlers {
-	return &Handlers{
-		userRepo: userRepo,
-	}
+	return &Handlers{userRepo: userRepo}
 }
-
-// --- Вспомогательные функции для унифицированных ответов ---
-
-func respondJSON(w http.ResponseWriter, status int, payload any) {
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false) // Сохраняем кириллицу без экранирования
-	if err := encoder.Encode(payload); err != nil {
-		// Если не смогли закодировать JSON, это уже критическая ошибка сервера
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}
-}
-
-func respondError(w http.ResponseWriter, status int, message string) {
-	respondJSON(w, status, map[string]string{"error": message})
-}
-
-// --- HTTP Хендлеры ---
 
 func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaimsFromContext(r.Context())
@@ -50,7 +24,6 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Если админ — возвращаем массив всех пользователей
 	if claims.Role == "admin" {
 		users, err := h.userRepo.GetAll(r.Context())
 		if err != nil {
@@ -61,7 +34,6 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Если обычный пользователь — возвращаем один объект (его данные)
 	user, err := h.userRepo.GetByID(r.Context(), claims.UserID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Ошибка при получении данных пользователя")
@@ -72,7 +44,6 @@ func (h *Handlers) GetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
-
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil || claims.Role != "admin" {
 		respondError(w, http.StatusForbidden, "Только администратор может создавать пользователей")
@@ -99,7 +70,6 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteUser(w http.ResponseWriter, r *http.Request) {
-
 	claims := middleware.GetClaimsFromContext(r.Context())
 	if claims == nil || claims.Role != "admin" {
 		respondError(w, http.StatusForbidden, "Только администратор может удалять пользователей")
