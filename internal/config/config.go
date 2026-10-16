@@ -49,11 +49,11 @@ func Load() (*Config, error) {
 
 	dbURL := env("DATABASE_URL", "")
 	if dbURL == "" {
-		user := env("POSTGRES_USER", "synapse-user")
-		pass := env("POSTGRES_PASSWORD", "synapse-password")
+		user := env("POSTGRES_USER", "synapse-default-user")
+		pass := env("POSTGRES_PASSWORD", "synapse-default-password")
 		host := env("POSTGRES_HOST", "localhost")
 		port := env("POSTGRES_PORT", "5432")
-		name := env("POSTGRES_DB", "synapse-db")
+		name := env("POSTGRES_DB", "synapse-default-db")
 		dbURL = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, pass, host, port, name)
 	}
 
