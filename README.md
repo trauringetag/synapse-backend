@@ -1,4 +1,4 @@
-# REST API (Go + PostgreSQL)
+# Synapse REST API (Go + PostgreSQL)
 
 Бэкенд REST API с регистрацией пользователей, аутентификацией через JWT в **HttpOnly Cookie** (access + refresh-токены) и управлением доступом на основе ролей (`user` / `admin`).
 
