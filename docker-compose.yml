@@ -1,0 +1,40 @@
+services:
+  postgres:
+    container_name: synapse-db
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-synapse-backend}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synapse-backend_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-synapse-backend}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapse-backend} -d ${POSTGRES_DB:-synapse-backend}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    container_name: synapse-api
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      APP_PORT: "8080"
+      POSTGRES_HOST: postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-synapse-backend}:${POSTGRES_PASSWORD:-synapse-backend_secret}@postgres:5432/${POSTGRES_DB:-synapse-backend}?sslmode=disable
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8080/health" ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

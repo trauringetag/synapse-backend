@@ -1,0 +1,75 @@
+package router
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+
+	"github.com/trauringetag/synapse-backend/internal/config"
+	"github.com/trauringetag/synapse-backend/internal/handler"
+	"github.com/trauringetag/synapse-backend/internal/middleware"
+	"github.com/trauringetag/synapse-backend/internal/repository"
+)
+
+func New(cfg *config.Config, users *repository.UserRepository, tokens *repository.TokenRepository, openAPI []byte) http.Handler {
+	authH := handler.NewAuthHandler(cfg, users, tokens)
+	userH := handler.NewUserHandler(users)
+
+	r := chi.NewRouter()
+	r.Use(chimw.RequestID)
+	r.Use(chimw.RealIP)
+	r.Use(chimw.Logger)
+	r.Use(chimw.Recoverer)
+	r.Use(middleware.JSONContentType)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.CORSOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "X-Admin-Token", "X-Request-ID"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status": "OK"}`))
+	})
+	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		_, _ = w.Write(openAPI)
+	})
+	r.Get("/docs", handler.SwaggerUI())
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs", http.StatusFound)
+	})
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(middleware.CacheControl)
+
+		r.Post("/register", authH.Register)
+		r.Post("/register-admin", authH.RegisterAdmin)
+		r.Post("/login", authH.Login)
+		r.Post("/refresh", authH.Refresh)
+		r.Post("/logout", authH.Logout)
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Authenticate(cfg))
+			r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
+
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireAdmin)
+				r.Get("/users", userH.List)
+				r.Get("/users/{id}", userH.GetByID)
+				r.Put("/users/{id}", userH.Put)
+				r.Patch("/users/{id}", userH.Patch)
+				r.Delete("/users/{id}", userH.Delete)
+			})
+		})
+	})
+
+	return r
+}

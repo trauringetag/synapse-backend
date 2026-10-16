@@ -1,0 +1,402 @@
+openapi: 3.0.3
+info:
+  title: Synapse API
+  version: 1.0.0
+  description: |
+    REST API для регистрации, аутентификации через JWT-куки и управления пользователями на основе ролей.
+
+    **Аутентификация:** Токены доступа (access) и обновления (refresh) передаются в виде **HttpOnly куки**
+    (`access_token`, `refresh_token`). Они **не** считываются из заголовка `Authorization`.
+
+    Эндпоинты, помеченные схемой безопасности `cookieAuth`, требуют наличия валидной куки `access_token`.
+
+    Флаги куки: `HttpOnly`, `Secure` (если `COOKIE_SECURE=true`), `SameSite` (Lax/Strict), `Path=/api/v1/`.
+
+    CORS настроен с `Access-Control-Allow-Credentials: true` и явным списком разрешенных источников (origin allow-list).
+servers:
+  - url: /api/v1
+    description: Версия 1
+tags:
+  - name: Auth
+    description: Регистрация и сессионные эндпоинты (куки)
+  - name: Users
+    description: Профиль и административное управление пользователями
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Кратковременный JWT токен доступа в HttpOnly куки. Требуется для защищенных эндпоинтов.
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: Долговременный JWT токен обновления в HttpOnly куки. Требуется для /refresh и используется в /logout.
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, admin]
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+    RegisterAdminRequest:
+      allOf:
+        - $ref: '#/components/schemas/RegisterRequest'
+        - type: object
+          properties:
+            admin_token:
+              type: string
+              description: Секретный токен из ADMIN_REGISTER_TOKEN. Альтернатива заголовку X-Admin-Token.
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+    PutUserRequest:
+      type: object
+      required: [email, password, name, role]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+    PatchUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+    Message:
+      type: object
+      properties:
+        message:
+          type: string
+  headers:
+    CacheControl:
+      description: Явное управление кэшированием. Для защищенных JSON-ответов используется no-store.
+      schema:
+        type: string
+        example: no-store, no-cache, must-revalidate, private
+paths:
+  /register:
+    post:
+      tags: [Auth]
+      summary: Регистрация стандартного пользователя
+      description: Создает пользователя с ролью `user`. Не требует куки.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Пользователь создан
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже зарегистрирован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /register-admin:
+    post:
+      tags: [Auth]
+      summary: Регистрация администратора
+      description: |
+        Создает пользователя с ролью `admin`. Требуется секретный токен регистрации администратора 
+        в заголовке `X-Admin-Token` **или** в JSON-поле `admin_token`. Не требует куки.
+      security: []
+      parameters:
+        - in: header
+          name: X-Admin-Token
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterAdminRequest'
+      responses:
+        '201':
+          description: Администратор создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '403':
+          description: Неверный токен регистрации администратора
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login:
+    post:
+      tags: [Auth]
+      summary: Вход в систему (любая роль)
+      description: |
+        Проверяет учетные данные и устанавливает HttpOnly куки `access_token` и `refresh_token`.
+        Клиентский JavaScript не может прочитать эти куки. Используйте `credentials: include` на фронтенде.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Вход выполнен; куки установлены
+          headers:
+            Set-Cookie:
+              description: HttpOnly куки access_token и refresh_token
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Неверные учетные данные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /refresh:
+    post:
+      tags: [Auth]
+      summary: Ротация токенов доступа и обновления
+      description: |
+        **Требуется кука `refresh_token`.** Считывает JWT обновления, проверяет, что он не отозван 
+        в базе данных, затем выпускает новую пару куки (ротация).
+      security:
+        - refreshCookie: []
+      responses:
+        '200':
+          description: Новые куки установлены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '401':
+          description: Отсутствует, истек срок действия или отозван токен обновления
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /logout:
+    post:
+      tags: [Auth]
+      summary: Выход из системы
+      description: |
+        Очищает куки токенов (устанавливает истекшие Set-Cookie) и **отзывает токен обновления на стороне сервера**
+        (добавляет в черный список БД). Отправьте куку `refresh_token`, если она присутствует.
+      security:
+        - refreshCookie: []
+      responses:
+        '200':
+          description: Выход выполнен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Получение собственного профиля
+      description: Требуется кука `access_token`.** Роли `user` и `admin`.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Текущий пользователь
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /users:
+    get:
+      tags: [Users]
+      summary: Список всех пользователей
+      description: Требуется кука `access_token`.** Только роль `admin`.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Список пользователей
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+        '403':
+          description: Не администратор
+  /users/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Users]
+      summary: Получение пользователя по ID
+      description: Требуется кука `access_token`.** Только роль `admin`.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Пользователь
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+        '403':
+          description: Не администратор
+        '404':
+          description: Не найден
+    put:
+      tags: [Users]
+      summary: Полная замена пользователя
+      description: Требуется кука `access_token`.** Только роль `admin`. Полная замена данных.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutUserRequest'
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+        '403':
+          description: Не администратор
+        '404':
+          description: Не найден
+    patch:
+      tags: [Users]
+      summary: Частичное обновление пользователя
+      description: Требуется кука `access_token`.** Только роль `admin`.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchUserRequest'
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+        '403':
+          description: Не администратор
+        '404':
+          description: Не найден
+    delete:
+      tags: [Users]
+      summary: Удаление пользователя
+      description: Требуется кука `access_token`.** Только роль `admin`.
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Удален
+        '401':
+          description: Отсутствует или неверна кука токена доступа
+        '403':
+          description: Не администратор
+        '404':
+          description: Не найден
