@@ -1,6 +1,6 @@
-# Synapse REST API (Go + PostgreSQL)
+# Synapse API (Go + PostgreSQL)
 
-Бэкенд REST API с регистрацией пользователей, аутентификацией через JWT в **HttpOnly Cookie** (access + refresh-токены) и управлением доступом на основе ролей (`user` / `admin`).
+REST API с регистрацией пользователей, аутентификацией через JWT в **HttpOnly Cookie** (access + refresh-токены) и управлением доступом на основе ролей (`user` / `admin`).
 
 ## Требования
 
@@ -78,30 +78,6 @@ go run ./cmd/api
 Swagger документирует требования к файлам Cookie для каждой защищенной операции (`cookieAuth` / `refreshCookie`).
 
 **Ограничение удаления пользователей:** администратор не может удалить собственную учетную запись или учетную запись другого администратора. В обоих случаях API возвращает `403 Forbidden`, а данные не изменяются. Удаление обычных пользователей доступно администраторам. Попытка удалить несуществующего пользователя возвращает `404 Not Found`.
-
-## Пример (curl)
-
-Зарегистрируйтесь и войдите в систему. Файлы Cookie сохраняются в `cookies.txt` (HttpOnly; браузеры делают это автоматически).
-
-```bash
-curl -s -c cookies.txt -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "secret123", "first_name": "Иван", "last_name": "Иванов"}' \
-  http://localhost:8080/api/v1/register
-
-curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "secret123"}' \
-  http://localhost:8080/api/v1/login
-
-curl -s -b cookies.txt http://localhost:8080/api/v1/users/me
-```
-
-Регистрация администратора:
-
-```bash
-curl -s -H "Content-Type: application/json" -H "X-Admin-Token: dev-admin-register-token" \
-  -d '{"email": "admin@example.com", "password": "secret123", "first_name":"Иван", "last_name":"Иванов"}' \
-  http://localhost:8080/api/v1/register-admin
-```
 
 ## Frontend / CORS
 

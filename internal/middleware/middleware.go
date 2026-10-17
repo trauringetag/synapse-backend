@@ -29,7 +29,6 @@ func FromContext(ctx context.Context) (*Principal, bool) {
 
 func CacheControl(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// JSON-API, требующие аутентификации и использующие заголовок Set-Cookie, не должны сохраняться в кэшах
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 		w.Header().Set("Pragma", "no-cache")
 		next.ServeHTTP(w, r)
