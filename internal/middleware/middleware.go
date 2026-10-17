@@ -47,7 +47,7 @@ func Authenticate(cfg *config.Config) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := auth.ReadCookie(r, auth.AccessCookie)
 			if err != nil || raw == "" {
-				httputil.Error(w, http.StatusUnauthorized, "Отсутствует cookie-файл с токеном доступа")
+				httputil.Error(w, http.StatusUnauthorized, "Необходима авторизация для получения доступа")
 				return
 			}
 			claims, err := auth.Parse(cfg, raw, "access")
