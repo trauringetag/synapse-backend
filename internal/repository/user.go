@@ -15,6 +15,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("conflict")
+var ErrProtected = errors.New("protected user")
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -126,14 +127,26 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 }
 
 func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1 AND role <> $2`, id, models.RoleAdmin)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	var role string
+	err = r.pool.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, id).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if role == models.RoleAdmin {
+		return ErrProtected
+	}
+	return ErrNotFound
 }
 
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*models.User, error) {

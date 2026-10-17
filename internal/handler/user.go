@@ -201,8 +201,22 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, "Неверный идентификатор пользователя")
 		return
 	}
+
+	principal, ok := middleware.FromContext(r.Context())
+	if !ok {
+		httputil.Error(w, http.StatusUnauthorized, "Несанкционированный доступ")
+		return
+	}
+	if principal.ID == id {
+		httputil.Error(w, http.StatusForbidden, "Администратор не может удалить собственную учетную запись")
+		return
+	}
+
 	if err := h.users.Delete(r.Context(), id); err == repository.ErrNotFound {
 		httputil.Error(w, http.StatusNotFound, "Пользователь не найден")
+		return
+	} else if err == repository.ErrProtected {
+		httputil.Error(w, http.StatusForbidden, "Нельзя удалить учетную запись администратора")
 		return
 	} else if err != nil {
 		httputil.Error(w, http.StatusInternalServerError, "Не удалось удалить пользователя")
