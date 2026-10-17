@@ -46,7 +46,9 @@ components:
         role:
           type: string
           enum: [user, admin]
-        name:
+        first_name:
+          type: string
+        last_name:
           type: string
         created_at:
           type: string
@@ -61,7 +63,7 @@ components:
           type: string
     RegisterRequest:
       type: object
-      required: [email, password, name]
+      required: [email, password, first_name, last_name]
       properties:
         email:
           type: string
@@ -69,7 +71,9 @@ components:
         password:
           type: string
           minLength: 8
-        name:
+        first_name:
+          type: string
+        last_name:
           type: string
     RegisterAdminRequest:
       allOf:
@@ -89,14 +93,16 @@ components:
           type: string
     PutUserRequest:
       type: object
-      required: [email, password, name, role]
+      required: [email, password, first_name, last_name, role]
       properties:
         email:
           type: string
         password:
           type: string
           minLength: 8
-        name:
+        first_name:
+          type: string
+        last_name:
           type: string
         role:
           type: string
@@ -109,7 +115,9 @@ components:
         password:
           type: string
           minLength: 8
-        name:
+        first_name:
+          type: string
+        last_name:
           type: string
         role:
           type: string
@@ -225,7 +233,7 @@ paths:
                   user:
                     $ref: '#/components/schemas/User'
         '401':
-          description: Неверные учетные данные
+          description: Неверный email или пароль
           content:
             application/json:
               schema:

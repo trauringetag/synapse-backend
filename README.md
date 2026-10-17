@@ -38,7 +38,7 @@ docker compose up --build
 - OpenAPI: http://localhost:8080/openapi.yaml
 - PostgreSQL: http://localhost:5432
 
-Таблицы схемы (`users`, `refresh_tokens`) создаются автоматически при запуске.
+Таблицы `users` и `refresh_tokens` создаются из `init.sql` при первом создании каталога данных PostgreSQL. Если volume `pgdata` уже существует, init-скрипт повторно не запускается. Для локальной разработки можно пересоздать БД командой `docker compose down -v` (это удалит данные) и затем выполнить `docker compose up --build`.
 
 ## Запуск локально (Без Docker для API)
 
@@ -83,7 +83,7 @@ Swagger документирует требования к файлам Cookie �
 
 ```bash
 curl -s -c cookies.txt -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "secret123", "name": "Пользователь"}' \
+  -d '{"email": "user@example.com", "password": "secret123", "first_name": "Иван", "last_name": "Иванов"}' \
   http://localhost:8080/api/v1/register
 
 curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
@@ -97,7 +97,7 @@ curl -s -b cookies.txt http://localhost:8080/api/v1/users/me
 
 ```bash
 curl -s -H "Content-Type: application/json" -H "X-Admin-Token: dev-admin-register-token" \
-  -d '{"email": "admin@example.com", "password": "secret123", "name":"Администратор"}' \
+  -d '{"email": "admin@example.com", "password": "secret123", "first_name":"Иван", "last_name":"Иванов"}' \
   http://localhost:8080/api/v1/register-admin
 ```
 

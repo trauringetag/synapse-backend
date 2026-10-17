@@ -24,14 +24,14 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
 }
 
-func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, name string) (*models.User, error) {
+func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
-		INSERT INTO users (email, password_hash, role, name)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, email, password_hash, role, name, created_at, updated_at
-	`, email, passwordHash, role, name).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Name, &u.CreatedAt, &u.UpdatedAt,
+		INSERT INTO users (email, password_hash, role, first_name, last_name)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
+	`, email, passwordHash, role, firstName, lastName).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -43,16 +43,16 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, 
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
-	return r.scanOne(ctx, `SELECT id, email, password_hash, role, name, created_at, updated_at FROM users WHERE id = $1`, id)
+	return r.scanOne(ctx, `SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at FROM users WHERE id = $1`, id)
 }
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
-	return r.scanOne(ctx, `SELECT id, email, password_hash, role, name, created_at, updated_at FROM users WHERE email = $1`, email)
+	return r.scanOne(ctx, `SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
 }
 
 func (r *UserRepository) List(ctx context.Context) ([]models.User, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, email, password_hash, role, name, created_at, updated_at
+		SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at
 		FROM users ORDER BY created_at ASC
 	`)
 	if err != nil {
@@ -63,7 +63,7 @@ func (r *UserRepository) List(ctx context.Context) ([]models.User, error) {
 	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Name, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -71,19 +71,20 @@ func (r *UserRepository) List(ctx context.Context) ([]models.User, error) {
 	return users, rows.Err()
 }
 
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, name, role, passwordHash *string) (*models.User, error) {
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash *string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = COALESCE($2, email),
-			name = COALESCE($3, name),
-			role = COALESCE($4, role),
-			password_hash = COALESCE($5, password_hash),
+			first_name = COALESCE($3, first_name),
+			last_name = COALESCE($4, last_name),
+			role = COALESCE($5, role),
+			password_hash = COALESCE($6, password_hash),
 			updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, email, password_hash, role, name, created_at, updated_at
-	`, id, email, name, role, passwordHash).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Name, &u.CreatedAt, &u.UpdatedAt,
+		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
+	`, id, email, firstName, lastName, role, passwordHash).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -97,19 +98,20 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, name, 
 	return &u, nil
 }
 
-func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, name, role, passwordHash string) (*models.User, error) {
+func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = $2,
-			name = $3,
-			role = $4,
-			password_hash = $5,
+			first_name = $3,
+			last_name = $4,
+			role = $5,
+			password_hash = $6,
 			updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, email, password_hash, role, name, created_at, updated_at
-	`, id, email, name, role, passwordHash).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Name, &u.CreatedAt, &u.UpdatedAt,
+		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
+	`, id, email, firstName, lastName, role, passwordHash).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -137,7 +139,7 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, q, arg).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Name, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

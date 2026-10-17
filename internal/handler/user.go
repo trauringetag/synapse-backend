@@ -22,17 +22,19 @@ func NewUserHandler(users *repository.UserRepository) *UserHandler {
 }
 
 type putUserRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Name     string `json:"name"`
-	Role     string `json:"role"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Role      string `json:"role"`
 }
 
 type patchUserRequest struct {
-	Email    *string `json:"email"`
-	Password *string `json:"password"`
-	Name     *string `json:"name"`
-	Role     *string `json:"role"`
+	Email     *string `json:"email"`
+	Password  *string `json:"password"`
+	FirstName *string `json:"first_name"`
+	LastName  *string `json:"last_name"`
+	Role      *string `json:"role"`
 }
 
 func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +90,11 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	name := strings.TrimSpace(req.Name)
+	firstName := strings.TrimSpace(req.FirstName)
+	lastName := strings.TrimSpace(req.LastName)
 	role := strings.ToLower(strings.TrimSpace(req.Role))
-	if email == "" || !strings.Contains(email, "@") || name == "" || len(req.Password) < 8 {
-		httputil.Error(w, http.StatusBadRequest, "Необходимо указать адрес электронной почты, имя и пароль (минимум 8 символов)")
+	if email == "" || !strings.Contains(email, "@") || firstName == "" || lastName == "" || len(req.Password) < 8 {
+		httputil.Error(w, http.StatusBadRequest, "Необходимо указать адрес электронной почты, имя, фамилию и пароль (минимум 8 символов)")
 		return
 	}
 	if role != models.RoleUser && role != models.RoleAdmin {
@@ -103,7 +106,7 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusInternalServerError, "Не удалось хешировать пароль")
 		return
 	}
-	user, err := h.users.Replace(r.Context(), id, email, name, role, string(hash))
+	user, err := h.users.Replace(r.Context(), id, email, firstName, lastName, role, string(hash))
 	if err == repository.ErrNotFound {
 		httputil.Error(w, http.StatusNotFound, "Пользователь не найден")
 		return
@@ -130,7 +133,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, "Некорректное тело JSON")
 		return
 	}
-	var email, name, role, passwordHash *string
+	var email, firstName, lastName, role, passwordHash *string
 	if req.Email != nil {
 		v := strings.ToLower(strings.TrimSpace(*req.Email))
 		if v == "" || !strings.Contains(v, "@") {
@@ -139,13 +142,21 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 		email = &v
 	}
-	if req.Name != nil {
-		v := strings.TrimSpace(*req.Name)
+	if req.FirstName != nil {
+		v := strings.TrimSpace(*req.FirstName)
 		if v == "" {
 			httputil.Error(w, http.StatusBadRequest, "Имя не может быть пустым")
 			return
 		}
-		name = &v
+		firstName = &v
+	}
+	if req.LastName != nil {
+		v := strings.TrimSpace(*req.LastName)
+		if v == "" {
+			httputil.Error(w, http.StatusBadRequest, "Фамилия не может быть пустой")
+			return
+		}
+		lastName = &v
 	}
 	if req.Role != nil {
 		v := strings.ToLower(strings.TrimSpace(*req.Role))
@@ -168,7 +179,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		s := string(hash)
 		passwordHash = &s
 	}
-	user, err := h.users.Update(r.Context(), id, email, name, role, passwordHash)
+	user, err := h.users.Update(r.Context(), id, email, firstName, lastName, role, passwordHash)
 	if err == repository.ErrNotFound {
 		httputil.Error(w, http.StatusNotFound, "Пользователь не найден")
 		return

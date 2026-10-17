@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-synapse-default-db}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
     ports:
       - "5432:5432"
     healthcheck:

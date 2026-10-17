@@ -31,10 +31,6 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := db.Migrate(ctx, pool); err != nil {
-		log.Fatalf("Migrate: %v", err)
-	}
-
 	users := repository.NewUserRepository(pool)
 	tokens := repository.NewTokenRepository(pool)
 	handler := router.New(cfg, users, tokens, docs.OpenAPI)

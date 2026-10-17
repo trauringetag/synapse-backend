@@ -28,7 +28,8 @@ func NewAuthHandler(cfg *config.Config, users *repository.UserRepository, tokens
 type registerRequest struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
-	Name       string `json:"name"`
+	FirstName  string `json:"first_name"`
+	LastName   string `json:"last_name"`
 	AdminToken string `json:"admin_token"`
 }
 
@@ -56,7 +57,8 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	name := strings.TrimSpace(req.Name)
+	firstName := strings.TrimSpace(req.FirstName)
+	lastName := strings.TrimSpace(req.LastName)
 	if email == "" || !strings.Contains(email, "@") {
 		httputil.Error(w, http.StatusBadRequest, "Необходим действительный адрес электронной почты")
 		return
@@ -65,8 +67,8 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 		httputil.Error(w, http.StatusBadRequest, "Пароль должен содержать не менее 8 символов")
 		return
 	}
-	if name == "" {
-		httputil.Error(w, http.StatusBadRequest, "Необходимо указать имя")
+	if firstName == "" || lastName == "" {
+		httputil.Error(w, http.StatusBadRequest, "Необходимо указать имя и фамилию")
 		return
 	}
 	if requireAdminToken {
@@ -85,7 +87,7 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 		httputil.Error(w, http.StatusInternalServerError, "Не удалось хешировать пароль")
 		return
 	}
-	user, err := h.users.Create(r.Context(), email, string(hash), role, name)
+	user, err := h.users.Create(r.Context(), email, string(hash), role, firstName, lastName)
 	if err == repository.ErrConflict {
 		httputil.Error(w, http.StatusConflict, "Электронная почта уже зарегистрирована")
 		return
@@ -106,11 +108,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	user, err := h.users.GetByEmail(r.Context(), email)
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Неверные учетные данные")
+		httputil.Error(w, http.StatusUnauthorized, "Неверный email или пароль")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Неверные учетные данные")
+		httputil.Error(w, http.StatusUnauthorized, "Неверный email или пароль")
 		return
 	}
 	if err := h.issueSession(w, r, user); err != nil {
