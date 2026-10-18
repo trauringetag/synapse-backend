@@ -69,7 +69,10 @@ go run ./cmd/api
 | Метод | Путь | Роли |
 |---|---|---|
 | `GET` | `/api/v1/users/me` | `user`, `admin` |
-| `GET` | `/api/v1/users` | `admin` |
+| `PUT` | `/api/v1/users/me` | `user`, `admin` (полная замена профиля: email, first_name, last_name) |
+| `PATCH` | `/api/v1/users/me` | `user`, `admin` (частичное обновление профиля) |
+| `GET` | `/api/v1/users` | `admin` (пагинация, поиск, фильтры role/status) |
+| `POST` | `/api/v1/users` | `admin` (создание пользователя) |
 | `GET` | `/api/v1/users/{id}` | `admin` |
 | `PUT` | `/api/v1/users/{id}` | `admin` (полная замена) |
 | `PATCH` | `/api/v1/users/{id}` | `admin` (частичное обновление) |
@@ -78,6 +81,16 @@ go run ./cmd/api
 Swagger документирует требования к файлам Cookie для каждой защищенной операции (`cookieAuth` / `refreshCookie`).
 
 **Ограничение удаления пользователей:** администратор не может удалить собственную учетную запись или учетную запись другого администратора. В обоих случаях API возвращает `403 Forbidden`, а данные не изменяются. Удаление обычных пользователей доступно администраторам. Попытка удалить несуществующего пользователя возвращает `404 Not Found`.
+
+
+### Управление профилем и пользователями
+
+- `PUT /api/v1/users/me` полностью заменяет поля профиля `email`, `first_name`, `last_name`. Все три поля обязательны; роль и статус пользователь изменить не может.
+- `PATCH /api/v1/users/me` изменяет только переданные поля профиля. Допустимые поля: `email`, `first_name`, `last_name`.
+- `GET /api/v1/users?page=1&limit=10&search=john&role=user&status=active` возвращает объект с `items`, `page`, `limit`, `total` и `total_pages`. `limit` от 1 до 100. Поиск выполняется по email, имени и фамилии.
+- `POST /api/v1/users` создаёт пользователя; поля `email`, `password` (минимум 8 символов), `first_name`, `last_name` обязательны. `role` принимает `user` или `admin`, по умолчанию `user`. Новый пользователь получает статус `active`.
+- Администратор может менять `status` через `PATCH /api/v1/users/{id}` на `active` или `inactive`. Фильтр `status` принимает эти же значения.
+- Ошибки возвращаются единообразно: `{ "error": "Validation Failed", "message": "...", "details": { "field": ["..."] } }`. Поле `details` опционально.
 
 ## Frontend / CORS
 

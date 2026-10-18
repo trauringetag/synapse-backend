@@ -76,7 +76,7 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
 			if !ok {
-				httputil.Error(w, http.StatusUnauthorized, "Несанкционированный доступ")
+				httputil.Error(w, http.StatusUnauthorized, "Не авторизован")
 				return
 			}
 			if _, ok := allowed[p.Role]; !ok {

@@ -60,7 +60,7 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 	firstName := strings.TrimSpace(req.FirstName)
 	lastName := strings.TrimSpace(req.LastName)
 	if email == "" || !strings.Contains(email, "@") {
-		httputil.Error(w, http.StatusBadRequest, "Необходим действительный адрес электронной почты")
+		httputil.Error(w, http.StatusBadRequest, "Укажите действительный адрес электронной почты")
 		return
 	}
 	if len(req.Password) < 8 {
@@ -89,7 +89,7 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 	}
 	user, err := h.users.Create(r.Context(), email, string(hash), role, firstName, lastName)
 	if err == repository.ErrConflict {
-		httputil.Error(w, http.StatusConflict, "Электронная почта уже зарегистрирована")
+		httputil.Error(w, http.StatusConflict, "Адрес электронной почты уже используется")
 		return
 	}
 	if err != nil {

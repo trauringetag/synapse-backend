@@ -59,10 +59,13 @@ func New(cfg *config.Config, users *repository.UserRepository, tokens *repositor
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authenticate(cfg))
 			r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
+			r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
+			r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin)
 				r.Get("/users", userH.List)
+				r.Post("/users", userH.Create)
 				r.Get("/users/{id}", userH.GetByID)
 				r.Put("/users/{id}", userH.Put)
 				r.Patch("/users/{id}", userH.Patch)

@@ -30,9 +30,9 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, 
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role, first_name, last_name)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
+		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
 	`, email, passwordHash, role, firstName, lastName).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -44,35 +44,89 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, 
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
-	return r.scanOne(ctx, `SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at FROM users WHERE id = $1`, id)
+	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE id = $1`, id)
 }
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
-	return r.scanOne(ctx, `SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
+	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
 }
 
-func (r *UserRepository) List(ctx context.Context) ([]models.User, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, email, password_hash, role, first_name, last_name, created_at, updated_at
-		FROM users ORDER BY created_at ASC
-	`)
+type UserListFilter struct {
+	Page   int
+	Limit  int
+	Search string
+	Role   string
+	Status string
+}
+
+type UserListResult struct {
+	Items      []models.User `json:"items"`
+	Page       int           `json:"page"`
+	Limit      int           `json:"limit"`
+	Total      int64         `json:"total"`
+	TotalPages int64         `json:"total_pages"`
+}
+
+func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListResult, error) {
+	where := ` WHERE ($1 = '' OR role = $1) AND ($2 = '' OR status = $2) AND ($3 = '' OR to_tsvector('simple', concat_ws(' ', email, first_name, last_name)) @@ plainto_tsquery('simple', $3) OR email ILIKE '%' || $3 || '%' OR first_name ILIKE '%' || $3 || '%' OR last_name ILIKE '%' || $3 || '%' OR (first_name || ' ' || last_name) ILIKE '%' || $3 || '%')`
+	var total int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`+where, f.Role, f.Status, f.Search).Scan(&total); err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users`+where+` ORDER BY created_at ASC LIMIT $4 OFFSET $5`, f.Role, f.Status, f.Search, f.Limit, (f.Page-1)*f.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	users := make([]models.User, 0)
+	items := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
-		users = append(users, u)
+		items = append(items, u)
 	}
-	return users, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	pages := total / int64(f.Limit)
+	if total%int64(f.Limit) != 0 {
+		pages++
+	}
+	return &UserListResult{Items: items, Page: f.Page, Limit: f.Limit, Total: total, TotalPages: pages}, nil
 }
 
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash *string) (*models.User, error) {
+func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*models.User, error) {
+	var u models.User
+	err := r.pool.QueryRow(ctx, `
+		UPDATE users 
+		SET 
+			updated_at = CASE 
+				WHEN email IS DISTINCT FROM $2 
+				OR first_name IS DISTINCT FROM $3 
+				OR last_name IS DISTINCT FROM $4 
+				THEN NOW() 
+				ELSE updated_at 
+			END,
+			email = $2, 
+			first_name = $3, 
+			last_name = $4
+		WHERE id = $1 
+		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
+	`, id, email, firstName, lastName).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrConflict
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash, status *string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
@@ -81,11 +135,18 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 			last_name = COALESCE($4, last_name),
 			role = COALESCE($5, role),
 			password_hash = COALESCE($6, password_hash),
-			updated_at = NOW()
+			status = COALESCE($7, status),
+			updated_at = CASE WHEN email IS DISTINCT FROM COALESCE($2, email)
+				OR first_name IS DISTINCT FROM COALESCE($3, first_name)
+				OR last_name IS DISTINCT FROM COALESCE($4, last_name)
+				OR role IS DISTINCT FROM COALESCE($5, role)
+				OR password_hash IS DISTINCT FROM COALESCE($6, password_hash)
+				OR status IS DISTINCT FROM COALESCE($7, status)
+				THEN NOW() ELSE updated_at END
 		WHERE id = $1
-		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, role, passwordHash).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
+		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
+	`, id, email, firstName, lastName, role, passwordHash, status).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -99,7 +160,7 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 	return &u, nil
 }
 
-func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash string) (*models.User, error) {
+func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash, status string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
@@ -108,11 +169,12 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 			last_name = $4,
 			role = $5,
 			password_hash = $6,
+			status = $7,
 			updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, email, password_hash, role, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, role, passwordHash).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
+		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
+	`, id, email, firstName, lastName, role, passwordHash, status).Scan(
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -152,7 +214,7 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, q, arg).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

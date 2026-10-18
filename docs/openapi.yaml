@@ -46,6 +46,9 @@ components:
         role:
           type: string
           enum: [user, admin]
+        status:
+          type: string
+          enum: [active, inactive]
         first_name:
           type: string
         last_name:
@@ -58,9 +61,18 @@ components:
           format: date-time
     Error:
       type: object
+      required: [error, message]
       properties:
         error:
           type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
     RegisterRequest:
       type: object
       required: [email, password, first_name, last_name]
@@ -89,14 +101,16 @@ components:
       properties:
         email:
           type: string
+          format: email
         password:
           type: string
     PutUserRequest:
       type: object
-      required: [email, password, first_name, last_name, role]
+      required: [email, password, first_name, last_name, role, status]
       properties:
         email:
           type: string
+          format: email
         password:
           type: string
           minLength: 8
@@ -107,11 +121,15 @@ components:
         role:
           type: string
           enum: [user, admin]
+        status:
+          type: string
+          enum: [active, inactive]
     PatchUserRequest:
       type: object
       properties:
         email:
           type: string
+          format: email
         password:
           type: string
           minLength: 8
@@ -122,6 +140,9 @@ components:
         role:
           type: string
           enum: [user, admin]
+        status:
+          type: string
+          enum: [active, inactive]
     Message:
       type: object
       properties:
@@ -296,6 +317,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    put:
+      tags: [Users]
+      summary: Полная замена собственного профиля
+      description: Доступно авторизованным пользователям. Роль и статус изменять через профиль нельзя.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, first_name, last_name]
+              properties:
+                email: {type: string, format: email}
+                first_name: {type: string}
+                last_name: {type: string}
+      responses:
+        '200':
+          description: Профиль обновлен
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {description: Ошибка валидации}
+        '401': {description: Не авторизован}
+        '409': {description: Email уже используется}
+    patch:
+      tags: [Users]
+      summary: Частичное обновление собственного профиля
+      description: Обновляет только переданные поля; роль и статус недоступны.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: {type: string, format: email}
+                first_name: {type: string}
+                last_name: {type: string}
+      responses:
+        '200':
+          description: Профиль обновлен
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {description: Ошибка валидации}
+        '401': {description: Не авторизован}
+        '409': {description: Email уже используется}
   /users:
     get:
       tags: [Users]
@@ -303,19 +375,61 @@ paths:
       description: Требуется кука `access_token`.** Только роль `admin`.
       security:
         - cookieAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema: {type: integer, minimum: 1, default: 1}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 10}
+        - in: query
+          name: search
+          description: Поиск по email, имени и фамилии
+          schema: {type: string}
+        - in: query
+          name: role
+          schema: {type: string, enum: [user, admin]}
+        - in: query
+          name: status
+          schema: {type: string, enum: [active, inactive]}
       responses:
         '200':
-          description: Список пользователей
+          description: Страница пользователей
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/User'
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/User'}
+                  page: {type: integer}
+                  limit: {type: integer}
+                  total: {type: integer, format: int64}
+                  total_pages: {type: integer, format: int64}
         '401':
           description: Отсутствует или неверна кука токена доступа
         '403':
           description: Не администратор
+    post:
+      tags: [Users]
+      summary: Создание пользователя администратором
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutUserRequest'}
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {description: Ошибка валидации}
+        '403': {description: Не администратор}
+        '409': {description: Email уже используется}
   /users/{id}:
     parameters:
       - in: path

@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	RoleUser  = "user"
-	RoleAdmin = "admin"
+	RoleUser       = "user"
+	RoleAdmin      = "admin"
+	StatusActive   = "active"
+	StatusInactive = "inactive"
 )
 
 type User struct {
@@ -16,6 +18,7 @@ type User struct {
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
 	Role         string    `json:"role"`
+	Status       string    `json:"status"`
 	FirstName    string    `json:"first_name"`
 	LastName     string    `json:"last_name"`
 	CreatedAt    time.Time `json:"created_at"`
