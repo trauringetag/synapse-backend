@@ -68,12 +68,22 @@ type UserListResult struct {
 }
 
 func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListResult, error) {
-	where := ` WHERE ($1 = '' OR role = $1) AND ($2 = '' OR status = $2) AND ($3 = '' OR to_tsvector('simple', concat_ws(' ', email, first_name, last_name)) @@ plainto_tsquery('simple', $3) OR email ILIKE '%' || $3 || '%' OR first_name ILIKE '%' || $3 || '%' OR last_name ILIKE '%' || $3 || '%' OR (first_name || ' ' || last_name) ILIKE '%' || $3 || '%')`
+	where := ` WHERE ($1 = '' OR role = $1) 
+				AND ($2 = '' OR status = $2) 
+				AND ($3 = '' OR to_tsvector('simple', concat_ws(' ', email, first_name, last_name)) @@ plainto_tsquery('simple', $3) 
+					OR email ILIKE '%' || $3 || '%' 
+					OR first_name ILIKE '%' || $3 || '%' 
+					OR last_name ILIKE '%' || $3 || '%' 
+					OR (first_name || ' ' || last_name) ILIKE '%' || $3 || '%')`
 	var total int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`+where, f.Role, f.Status, f.Search).Scan(&total); err != nil {
 		return nil, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users`+where+` ORDER BY created_at ASC LIMIT $4 OFFSET $5`, f.Role, f.Status, f.Search, f.Limit, (f.Page-1)*f.Limit)
+	rows, err := r.pool.Query(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at 
+									FROM users`+where+` 
+									ORDER BY created_at 
+									ASC LIMIT $4 OFFSET $5`,
+		f.Role, f.Status, f.Search, f.Limit, (f.Page-1)*f.Limit)
 	if err != nil {
 		return nil, err
 	}

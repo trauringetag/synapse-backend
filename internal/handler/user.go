@@ -98,7 +98,11 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	last := strings.TrimSpace(req.LastName)
 	role := strings.ToLower(strings.TrimSpace(req.Role))
 	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" || len(req.Password) < 8 {
-		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"email": {messages.InvalidEmail}, "first_name": {messages.FirstNameRequired}, "last_name": {messages.LastNameRequired}, "password": {messages.PasswordTooShort}})
+		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
+			"email":      {messages.InvalidEmail},
+			"first_name": {messages.FirstNameRequired},
+			"last_name":  {messages.LastNameRequired},
+			"password":   {messages.PasswordTooShort}})
 		return
 	}
 	if role == "" {
@@ -142,7 +146,10 @@ func (h *UserHandler) PutMe(w http.ResponseWriter, r *http.Request) {
 	}
 	email, first, last := strings.ToLower(strings.TrimSpace(req.Email)), strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName)
 	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" {
-		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"email": {messages.InvalidEmail}, "first_name": {messages.FirstNameRequired}, "last_name": {messages.LastNameRequired}})
+		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
+			"email":      {messages.InvalidEmail},
+			"first_name": {messages.FirstNameRequired},
+			"last_name":  {messages.LastNameRequired}})
 		return
 	}
 	user, err := h.users.ReplaceProfile(r.Context(), p.ID, email, first, last)
@@ -256,7 +263,11 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 	role := strings.ToLower(strings.TrimSpace(req.Role))
 	status := strings.ToLower(strings.TrimSpace(req.Status))
 	if email == "" || !strings.Contains(email, "@") || firstName == "" || lastName == "" || len(req.Password) < 8 {
-		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"email": {messages.InvalidEmail}, "first_name": {messages.FirstNameRequired}, "last_name": {messages.LastNameRequired}, "password": {messages.PasswordTooShort}})
+		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
+			"email":      {messages.InvalidEmail},
+			"first_name": {messages.FirstNameRequired},
+			"last_name":  {messages.LastNameRequired},
+			"password":   {messages.PasswordTooShort}})
 		return
 	}
 	if role != models.RoleUser && role != models.RoleAdmin {
