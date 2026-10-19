@@ -27,11 +27,10 @@ func NewAuthHandler(cfg *config.Config, users *repository.UserRepository, tokens
 }
 
 type registerRequest struct {
-	Email      string `json:"email"`
-	Password   string `json:"password"`
-	FirstName  string `json:"first_name"`
-	LastName   string `json:"last_name"`
-	AdminToken string `json:"admin_token"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 type loginRequest struct {
@@ -83,10 +82,7 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 	}
 
 	if requireAdminToken {
-		provided := strings.TrimSpace(req.AdminToken)
-		if provided == "" {
-			provided = strings.TrimSpace(r.Header.Get("X-Admin-Token"))
-		}
+		provided := strings.TrimSpace(r.Header.Get("X-Admin-Token"))
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(h.cfg.AdminRegisterToken)) != 1 {
 			httputil.Error(w, http.StatusForbidden, messages.InvalidAdminToken, nil)
 			return
