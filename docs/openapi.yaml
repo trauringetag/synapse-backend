@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Synapse API
-  version: 1.0.0
+  version: 1.0.8
   description: |
     REST API для регистрации, аутентификации через JWT-куки и управления пользователями на основе ролей.
 
@@ -36,6 +36,15 @@ components:
   schemas:
     User:
       type: object
+      required:
+        - id
+        - email
+        - role
+        - status
+        - first_name
+        - last_name
+        - created_at
+        - updated_at
       properties:
         id:
           type: string
@@ -61,21 +70,39 @@ components:
           format: date-time
     Error:
       type: object
-      required: [error, message]
+      required:
+        - error
+        - message
       properties:
         error:
           type: string
+          example: Validation Failed
         message:
           type: string
+          example: Проверьте обязательные поля пользователя
         details:
           type: object
           additionalProperties:
             type: array
             items:
               type: string
+          example:
+            email: ["Укажите действительный email"]
+            password: ["Пароль должен содержать не менее 8 символов"]
+    Message:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
     RegisterRequest:
       type: object
-      required: [email, password, first_name, last_name]
+      required:
+        - email
+        - password
+        - first_name
+        - last_name
       properties:
         email:
           type: string
@@ -97,16 +124,47 @@ components:
               description: Секретный токен из ADMIN_REGISTER_TOKEN. Альтернатива заголовку X-Admin-Token.
     LoginRequest:
       type: object
-      required: [email, password]
+      required:
+        - email
+        - password
       properties:
         email:
           type: string
           format: email
         password:
           type: string
-    PutUserRequest:
+    CreateUserRequest:
       type: object
-      required: [email, password, first_name, last_name, role, status]
+      required:
+        - email
+        - password
+        - first_name
+        - last_name
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        first_name:
+          type: string
+        last_name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+          default: user
+          description: По умолчанию 'user'.
+    UpdateUserRequest:
+      type: object
+      required:
+        - email
+        - password
+        - first_name
+        - last_name
+        - role
+        - status
       properties:
         email:
           type: string
@@ -143,11 +201,56 @@ components:
         status:
           type: string
           enum: [active, inactive]
-    Message:
+    UpdateMeRequest:
+      type: object
+      required:
+        - email
+        - first_name
+        - last_name
+      properties:
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+    PatchMeRequest:
       type: object
       properties:
-        message:
+        email:
           type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+    UserListResponse:
+      type: object
+      required:
+        - items
+        - page
+        - limit
+        - total
+        - total_pages
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          format: int64
+        total_pages:
+          type: integer
+          format: int64
   headers:
     CacheControl:
       description: Явное управление кэшированием. Для защищенных JSON-ответов используется no-store.
@@ -157,7 +260,8 @@ components:
 paths:
   /register:
     post:
-      tags: [Auth]
+      tags:
+        - Auth
       summary: Регистрация стандартного пользователя
       description: Создает пользователя с ролью `user`. Не требует куки.
       security: []
@@ -191,7 +295,8 @@ paths:
                 $ref: '#/components/schemas/Error'
   /register-admin:
     post:
-      tags: [Auth]
+      tags:
+        - Auth
       summary: Регистрация администратора
       description: |
         Создает пользователя с ролью `admin`. Требуется секретный токен регистрации администратора 
@@ -203,6 +308,7 @@ paths:
           required: false
           schema:
             type: string
+          description: Секретный токен регистрации администратора (альтернатива полю admin_token в теле запроса).
       requestBody:
         required: true
         content:
@@ -212,10 +318,19 @@ paths:
       responses:
         '201':
           description: Администратор создан
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Неверный токен регистрации администратора
           content:
@@ -224,7 +339,8 @@ paths:
                 $ref: '#/components/schemas/Error'
   /login:
     post:
-      tags: [Auth]
+      tags:
+        - Auth
       summary: Вход в систему (любая роль)
       description: |
         Проверяет учетные данные и устанавливает HttpOnly куки `access_token` и `refresh_token`.
@@ -244,15 +360,27 @@ paths:
               description: HttpOnly куки access_token и refresh_token
               schema:
                 type: string
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - message
+                  - user
                 properties:
                   message:
                     type: string
+                    example: В системе
                   user:
                     $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Неверный email или пароль
           content:
@@ -261,7 +389,8 @@ paths:
                 $ref: '#/components/schemas/Error'
   /refresh:
     post:
-      tags: [Auth]
+      tags:
+        - Auth
       summary: Ротация токенов доступа и обновления
       description: |
         **Требуется кука `refresh_token`.** Считывает JWT обновления, проверяет, что он не отозван 
@@ -271,6 +400,13 @@ paths:
       responses:
         '200':
           description: Новые куки установлены
+          headers:
+            Set-Cookie:
+              description: HttpOnly куки access_token и refresh_token
+              schema:
+                type: string
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -283,7 +419,8 @@ paths:
                 $ref: '#/components/schemas/Error'
   /logout:
     post:
-      tags: [Auth]
+      tags:
+        - Auth
       summary: Выход из системы
       description: |
         Очищает куки токенов (устанавливает истекшие Set-Cookie) и **отзывает токен обновления на стороне сервера**
@@ -293,20 +430,31 @@ paths:
       responses:
         '200':
           description: Выход выполнен
+          headers:
+            Set-Cookie:
+              description: Истекшие куки access_token и refresh_token для удаления
+              schema:
+                type: string
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
   /users/me:
     get:
-      tags: [Users]
+      tags:
+        - Users
       summary: Получение собственного профиля
-      description: Требуется кука `access_token`.** Роли `user` и `admin`.
+      description: Требуется кука `access_token`. Доступно ролям `user` и `admin`.
       security:
         - cookieAuth: []
       responses:
         '200':
           description: Текущий пользователь
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -318,9 +466,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
     put:
-      tags: [Users]
+      tags:
+        - Users
       summary: Полная замена собственного профиля
-      description: Доступно авторизованным пользователям. Роль и статус изменять через профиль нельзя.
+      description: Доступно авторизованным пользователям. Роль и статус изменять через этот эндпоинт нельзя.
       security:
         - cookieAuth: []
       requestBody:
@@ -328,25 +477,40 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [email, first_name, last_name]
-              properties:
-                email: {type: string, format: email}
-                first_name: {type: string}
-                last_name: {type: string}
+              $ref: '#/components/schemas/UpdateMeRequest'
       responses:
         '200':
           description: Профиль обновлен
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/User'}
-        '400': {description: Ошибка валидации}
-        '401': {description: Не авторизован}
-        '409': {description: Email уже используется}
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже используется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     patch:
-      tags: [Users]
+      tags:
+        - Users
       summary: Частичное обновление собственного профиля
-      description: Обновляет только переданные поля; роль и статус недоступны.
+      description: Обновляет только переданные поля; роль и статус недоступны для изменения.
       security:
         - cookieAuth: []
       requestBody:
@@ -354,82 +518,151 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                email: {type: string, format: email}
-                first_name: {type: string}
-                last_name: {type: string}
+              $ref: '#/components/schemas/PatchMeRequest'
       responses:
         '200':
           description: Профиль обновлен
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/User'}
-        '400': {description: Ошибка валидации}
-        '401': {description: Не авторизован}
-        '409': {description: Email уже используется}
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации или не переданы поля для обновления
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже используется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /users:
     get:
-      tags: [Users]
+      tags:
+        - Users
       summary: Список всех пользователей
-      description: Требуется кука `access_token`.** Только роль `admin`.
+      description: Требуется кука `access_token`. Только роль `admin`.
       security:
         - cookieAuth: []
       parameters:
         - in: query
           name: page
-          schema: {type: integer, minimum: 1, default: 1}
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Номер страницы
         - in: query
           name: limit
-          schema: {type: integer, minimum: 1, maximum: 100, default: 10}
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          description: Количество элементов на странице
         - in: query
           name: search
+          schema:
+            type: string
           description: Поиск по email, имени и фамилии
-          schema: {type: string}
         - in: query
           name: role
-          schema: {type: string, enum: [user, admin]}
+          schema:
+            type: string
+            enum: [user, admin]
+          description: Фильтр по роли
         - in: query
           name: status
-          schema: {type: string, enum: [active, inactive]}
+          schema:
+            type: string
+            enum: [active, inactive]
+          description: Фильтр по статусу
       responses:
         '200':
           description: Страница пользователей
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items: {$ref: '#/components/schemas/User'}
-                  page: {type: integer}
-                  limit: {type: integer}
-                  total: {type: integer, format: int64}
-                  total_pages: {type: integer, format: int64}
+                $ref: '#/components/schemas/UserListResponse'
+        '400':
+          description: Ошибка валидации параметров запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Не администратор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
-      tags: [Users]
+      tags:
+        - Users
       summary: Создание пользователя администратором
+      description: Требуется кука `access_token`. Только роль `admin`. Новый пользователь получает статус `active`.
       security:
         - cookieAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/PutUserRequest'}
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
       responses:
         '201':
           description: Пользователь создан
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/User'}
-        '400': {description: Ошибка валидации}
-        '403': {description: Не администратор}
-        '409': {description: Email уже используется}
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Не администратор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже используется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /users/{id}:
     parameters:
       - in: path
@@ -438,29 +671,53 @@ paths:
         schema:
           type: string
           format: uuid
+        description: UUID пользователя
     get:
-      tags: [Users]
+      tags:
+        - Users
       summary: Получение пользователя по ID
-      description: Требуется кука `access_token`.** Только роль `admin`.
+      description: Требуется кука `access_token`. Только роль `admin`.
       security:
         - cookieAuth: []
       responses:
         '200':
           description: Пользователь
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '400':
+          description: Неверный формат UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Не администратор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
-          description: Не найден
+          description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     put:
-      tags: [Users]
-      summary: Полная замена пользователя
-      description: Требуется кука `access_token`.** Только роль `admin`. Полная замена данных.
+      tags:
+        - Users
+      summary: Полная замена данных пользователя
+      description: Требуется кука `access_token`. Только роль `admin`. Полная замена всех данных пользователя.
       security:
         - cookieAuth: []
       requestBody:
@@ -468,24 +725,52 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PutUserRequest'
+              $ref: '#/components/schemas/UpdateUserRequest'
       responses:
         '200':
-          description: Обновлено
+          description: Данные пользователя обновлены
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Не администратор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
-          description: Не найден
+          description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже используется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     patch:
-      tags: [Users]
-      summary: Частичное обновление пользователя
-      description: Требуется кука `access_token`.** Только роль `admin`.
+      tags:
+        - Users
+      summary: Частичное обновление данных пользователя
+      description: Требуется кука `access_token`. Только роль `admin`. Обновляет только переданные поля.
       security:
         - cookieAuth: []
       requestBody:
@@ -496,34 +781,77 @@ paths:
               $ref: '#/components/schemas/PatchUserRequest'
       responses:
         '200':
-          description: Обновлено
+          description: Данные пользователя обновлены
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Не администратор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
-          description: Не найден
+          description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email уже используется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     delete:
-      tags: [Users]
+      tags:
+        - Users
       summary: Удаление пользователя
-      description: >-
-        Требуется кука `access_token`. Только роль `admin`. Удаление запрещено,
-        если целевая учетная запись принадлежит администратору или совпадает с
-        учетной записью текущего администратора. В этих случаях данные не изменяются.
+      description: |
+        Требуется кука `access_token`. Только роль `admin`. 
+        Удаление запрещено, если целевая учетная запись принадлежит администратору или совпадает с учетной записью текущего администратора.
       security:
         - cookieAuth: []
       responses:
         '204':
-          description: Пользователь удален
+          description: Пользователь успешно удален
+        '400':
+          description: Неверный формат UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Отсутствует или неверна кука токена доступа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
-          description: >-
-            Недостаточно прав или удаление запрещено: нельзя удалить самого себя
-            либо учетную запись другого администратора.
+          description: Недостаточно прав или удаление запрещено (нельзя удалить себя или другого администратора)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

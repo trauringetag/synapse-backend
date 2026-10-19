@@ -17,27 +17,28 @@ func JSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func Error(w http.ResponseWriter, status int, msg string) {
-	title := "Request Failed"
+func Error(w http.ResponseWriter, status int, msg string, details map[string][]string) {
+	title := "REQUEST_FAILED"
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		title = "Validation Failed"
+		title = "VALIDATION_FAILED"
 	case http.StatusUnauthorized:
-		title = "Unauthorized"
+		title = "UNAUTHORIZED"
 	case http.StatusForbidden:
-		title = "Forbidden"
+		title = "FORBIDDEN"
 	case http.StatusNotFound:
-		title = "Not Found"
+		title = "NOT_FOUND"
 	case http.StatusConflict:
-		title = "Conflict"
+		title = "CONFLICT"
 	case http.StatusInternalServerError:
-		title = "Internal Server Error"
+		title = "INTERNAL_SERVER_ERROR"
 	}
-	JSON(w, status, ErrorBody{Error: title, Message: msg})
-}
 
-func ValidationError(w http.ResponseWriter, status int, msg string, details map[string][]string) {
-	JSON(w, status, ErrorBody{Error: "Validation Failed", Message: msg, Details: details})
+	JSON(w, status, ErrorBody{
+		Error:   title,
+		Message: msg,
+		Details: details,
+	})
 }
 
 func Decode(r *http.Request, dst any) error {

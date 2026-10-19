@@ -9,6 +9,7 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/auth"
 	"github.com/trauringetag/synapse-backend/internal/config"
 	"github.com/trauringetag/synapse-backend/internal/httputil"
+	"github.com/trauringetag/synapse-backend/internal/messages"
 	"github.com/trauringetag/synapse-backend/internal/models"
 )
 
@@ -47,17 +48,17 @@ func Authenticate(cfg *config.Config) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := auth.ReadCookie(r, auth.AccessCookie)
 			if err != nil || raw == "" {
-				httputil.Error(w, http.StatusUnauthorized, "Необходима авторизация для получения доступа")
+				httputil.Error(w, http.StatusUnauthorized, messages.AuthorizationRequired, nil)
 				return
 			}
 			claims, err := auth.Parse(cfg, raw, "access")
 			if err != nil {
-				httputil.Error(w, http.StatusUnauthorized, "Недействительный или просроченный токен доступа")
+				httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 				return
 			}
 			id, err := uuid.Parse(claims.Subject)
 			if err != nil {
-				httputil.Error(w, http.StatusUnauthorized, "Недопустимый токен субъекта")
+				httputil.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
 				return
 			}
 			p := &Principal{ID: id, Email: claims.Email, Role: claims.Role}
@@ -76,11 +77,11 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
 			if !ok {
-				httputil.Error(w, http.StatusUnauthorized, "Не авторизован")
+				httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 				return
 			}
 			if _, ok := allowed[p.Role]; !ok {
-				httputil.Error(w, http.StatusForbidden, "Недостаточно прав")
+				httputil.Error(w, http.StatusForbidden, messages.InsufficientPermissions, nil)
 				return
 			}
 			next.ServeHTTP(w, r)

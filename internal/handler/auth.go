@@ -11,6 +11,7 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/auth"
 	"github.com/trauringetag/synapse-backend/internal/config"
 	"github.com/trauringetag/synapse-backend/internal/httputil"
+	"github.com/trauringetag/synapse-backend/internal/messages"
 	"github.com/trauringetag/synapse-backend/internal/models"
 	"github.com/trauringetag/synapse-backend/internal/repository"
 )
@@ -51,49 +52,59 @@ func (h *AuthHandler) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, role string, requireAdminToken bool) {
+
 	var req registerRequest
+
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, "Некорректное тело JSON")
+		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
 		return
 	}
+
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	firstName := strings.TrimSpace(req.FirstName)
 	lastName := strings.TrimSpace(req.LastName)
+
+	errors := make(map[string][]string)
 	if email == "" || !strings.Contains(email, "@") {
-		httputil.Error(w, http.StatusBadRequest, "Укажите действительный адрес электронной почты")
-		return
+		errors["email"] = []string{messages.InvalidEmail}
 	}
 	if len(req.Password) < 8 {
-		httputil.Error(w, http.StatusBadRequest, "Пароль должен содержать не менее 8 символов")
+		errors["password"] = []string{messages.PasswordTooShort}
+	}
+	if firstName == "" {
+		errors["first_name"] = []string{messages.FirstNameRequired}
+	}
+	if lastName == "" {
+		errors["last_name"] = []string{messages.LastNameRequired}
+	}
+	if len(errors) > 0 {
+		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, errors)
 		return
 	}
-	if firstName == "" || lastName == "" {
-		httputil.Error(w, http.StatusBadRequest, "Необходимо указать имя и фамилию")
-		return
-	}
+
 	if requireAdminToken {
 		provided := strings.TrimSpace(req.AdminToken)
 		if provided == "" {
 			provided = strings.TrimSpace(r.Header.Get("X-Admin-Token"))
 		}
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(h.cfg.AdminRegisterToken)) != 1 {
-			httputil.Error(w, http.StatusForbidden, "Недействительный токен регистрации администратора")
+			httputil.Error(w, http.StatusForbidden, messages.InvalidAdminToken, nil)
 			return
 		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		httputil.Error(w, http.StatusInternalServerError, "Не удалось хешировать пароль")
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
 		return
 	}
 	user, err := h.users.Create(r.Context(), email, string(hash), role, firstName, lastName)
 	if err == repository.ErrConflict {
-		httputil.Error(w, http.StatusConflict, "Адрес электронной почты уже используется")
+		httputil.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
 		return
 	}
 	if err != nil {
-		httputil.Error(w, http.StatusInternalServerError, "Не удалось создать пользователя")
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToCreateUser, nil)
 		return
 	}
 	httputil.JSON(w, http.StatusCreated, user)
@@ -102,21 +113,21 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, "Некорректное тело JSON")
+		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	user, err := h.users.GetByEmail(r.Context(), email)
-	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Неверный email или пароль")
-		return
+	var passwordErr error
+	if err == nil {
+		passwordErr = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
 	}
-	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Неверный email или пароль")
+	if err != nil || passwordErr != nil {
+		httputil.Error(w, http.StatusUnauthorized, messages.InvalidCredentials, nil)
 		return
 	}
 	if err := h.issueSession(w, r, user); err != nil {
-		httputil.Error(w, http.StatusInternalServerError, "Не удалось выпустить токены")
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
 		return
 	}
 	httputil.JSON(w, http.StatusOK, map[string]any{
@@ -128,37 +139,37 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	raw, err := auth.ReadCookie(r, auth.RefreshCookie)
 	if err != nil || raw == "" {
-		httputil.Error(w, http.StatusUnauthorized, "Отсутствует cookie-файл токена обновления")
+		httputil.Error(w, http.StatusUnauthorized, messages.MissingRefreshTokenCookie, nil)
 		return
 	}
 	claims, err := auth.Parse(h.cfg, raw, "refresh")
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Недействительный или просроченный токен обновления")
+		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 		return
 	}
 	hash := auth.HashToken(raw)
 	stored, err := h.tokens.GetActive(r.Context(), hash)
 	if err != nil || stored.Revoked || time.Now().After(stored.ExpiresAt) {
-		httputil.Error(w, http.StatusUnauthorized, "Токен обновления отозван или неизвестен")
+		httputil.Error(w, http.StatusUnauthorized, messages.RevokedOrUnknownRefreshToken, nil)
 		return
 	}
 	_ = h.tokens.Revoke(r.Context(), hash)
 
 	id, err := repository.UUIDFromString(claims.Subject)
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Недопустимый токен субъекта")
+		httputil.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
 		return
 	}
 	user, err := h.users.GetByID(r.Context(), id)
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, "Пользователь не найден")
+		httputil.Error(w, http.StatusUnauthorized, messages.UserNotFound, nil)
 		return
 	}
 	if err := h.issueSession(w, r, user); err != nil {
-		httputil.Error(w, http.StatusInternalServerError, "Не удалось выпустить токены")
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
 		return
 	}
-	httputil.JSON(w, http.StatusOK, messageResponse{Message: "Токены обновлены"})
+	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +177,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		_ = h.tokens.Revoke(r.Context(), auth.HashToken(raw))
 	}
 	auth.ClearTokenCookies(w, h.cfg)
-	httputil.JSON(w, http.StatusOK, messageResponse{Message: "Вышли из системы"})
+	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})
 }
 
 func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, user *models.User) error {
