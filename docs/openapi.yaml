@@ -118,10 +118,6 @@ components:
       allOf:
         - $ref: '#/components/schemas/RegisterRequest'
         - type: object
-          properties:
-            admin_token:
-              type: string
-              description: Секретный токен из ADMIN_REGISTER_TOKEN. Альтернатива заголовку X-Admin-Token.
     LoginRequest:
       type: object
       required:
@@ -300,7 +296,7 @@ paths:
       summary: Регистрация администратора
       description: |
         Создает пользователя с ролью `admin`. Требуется секретный токен регистрации администратора 
-        в заголовке `X-Admin-Token` **или** в JSON-поле `admin_token`. Не требует куки.
+        в заголовке `X-Admin-Token`. Не требует куки.
       security: []
       parameters:
         - in: header
@@ -308,7 +304,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Секретный токен регистрации администратора (альтернатива полю admin_token в теле запроса).
+          description: Секретный токен регистрации администратора.
       requestBody:
         required: true
         content:
