@@ -159,7 +159,6 @@ components:
         - password
         - first_name
         - last_name
-        - role
         - status
       properties:
         email:
@@ -172,9 +171,6 @@ components:
           type: string
         last_name:
           type: string
-        role:
-          type: string
-          enum: [user, admin]
         status:
           type: string
           enum: [active, inactive]
@@ -191,9 +187,6 @@ components:
           type: string
         last_name:
           type: string
-        role:
-          type: string
-          enum: [user, admin]
         status:
           type: string
           enum: [active, inactive]
@@ -713,7 +706,7 @@ paths:
       tags:
         - Users
       summary: Полная замена данных пользователя
-      description: Требуется кука `access_token`. Только роль `admin`. Полная замена всех данных пользователя.
+      description: Требуется кука `access_token`. Только роль `admin`. Полная замена редактируемых данных. Существующая роль сохраняется; переданное поле `role` игнорируется.
       security:
         - cookieAuth: []
       requestBody:
@@ -766,7 +759,7 @@ paths:
       tags:
         - Users
       summary: Частичное обновление данных пользователя
-      description: Требуется кука `access_token`. Только роль `admin`. Обновляет только переданные поля.
+      description: Требуется кука `access_token`. Только роль `admin`. Обновляет только переданные поля. Существующая роль сохраняется; переданное поле `role` игнорируется.
       security:
         - cookieAuth: []
       requestBody:

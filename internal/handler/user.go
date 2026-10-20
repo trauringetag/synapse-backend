@@ -37,7 +37,6 @@ type patchUserRequest struct {
 	Password  *string `json:"password"`
 	FirstName *string `json:"first_name"`
 	LastName  *string `json:"last_name"`
-	Role      *string `json:"role"`
 	Status    *string `json:"status"`
 }
 
@@ -212,7 +211,7 @@ func (h *UserHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		}
 		last = &v
 	}
-	user, err := h.users.Update(r.Context(), p.ID, email, first, last, nil, nil, nil)
+	user, err := h.users.Update(r.Context(), p.ID, email, first, last, nil, nil)
 	if err == repository.ErrConflict {
 		httputil.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
 		return
@@ -260,22 +259,25 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	firstName := strings.TrimSpace(req.FirstName)
 	lastName := strings.TrimSpace(req.LastName)
-	role := strings.ToLower(strings.TrimSpace(req.Role))
 	status := strings.ToLower(strings.TrimSpace(req.Status))
-	if email == "" || !strings.Contains(email, "@") || firstName == "" || lastName == "" || len(req.Password) < 8 {
-		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
-			"email":      {messages.InvalidEmail},
-			"first_name": {messages.FirstNameRequired},
-			"last_name":  {messages.LastNameRequired},
-			"password":   {messages.PasswordTooShort}})
-		return
+	errors := make(map[string][]string)
+	if email == "" || !strings.Contains(email, "@") {
+		errors["email"] = []string{messages.InvalidEmail}
 	}
-	if role != models.RoleUser && role != models.RoleAdmin {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
-		return
+	if len(req.Password) < 8 {
+		errors["password"] = []string{messages.PasswordTooShort}
+	}
+	if firstName == "" {
+		errors["first_name"] = []string{messages.FirstNameRequired}
+	}
+	if lastName == "" {
+		errors["last_name"] = []string{messages.LastNameRequired}
 	}
 	if status != models.StatusActive && status != models.StatusInactive {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"status": {messages.StatusInvalidValue}})
+		errors["status"] = []string{messages.StatusInvalidValue}
+	}
+	if len(errors) > 0 {
+		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, errors)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -283,7 +285,7 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
 		return
 	}
-	user, err := h.users.Replace(r.Context(), id, email, firstName, lastName, role, string(hash), status)
+	user, err := h.users.Replace(r.Context(), id, email, firstName, lastName, string(hash), status)
 	if err == repository.ErrNotFound {
 		httputil.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
 		return
@@ -310,7 +312,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
 		return
 	}
-	var email, firstName, lastName, role, passwordHash, status *string
+	var email, firstName, lastName, passwordHash, status *string
 	if req.Email != nil {
 		v := strings.ToLower(strings.TrimSpace(*req.Email))
 		if v == "" || !strings.Contains(v, "@") {
@@ -335,14 +337,6 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 		lastName = &v
 	}
-	if req.Role != nil {
-		v := strings.ToLower(strings.TrimSpace(*req.Role))
-		if v != models.RoleUser && v != models.RoleAdmin {
-			httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
-			return
-		}
-		role = &v
-	}
 	if req.Status != nil {
 		v := strings.ToLower(strings.TrimSpace(*req.Status))
 		if v != models.StatusActive && v != models.StatusInactive {
@@ -364,7 +358,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		s := string(hash)
 		passwordHash = &s
 	}
-	user, err := h.users.Update(r.Context(), id, email, firstName, lastName, role, passwordHash, status)
+	user, err := h.users.Update(r.Context(), id, email, firstName, lastName, passwordHash, status)
 	if err == repository.ErrNotFound {
 		httputil.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
 		return

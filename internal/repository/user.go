@@ -136,26 +136,24 @@ func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email
 	return &u, nil
 }
 
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash, status *string) (*models.User, error) {
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = COALESCE($2, email),
 			first_name = COALESCE($3, first_name),
 			last_name = COALESCE($4, last_name),
-			role = COALESCE($5, role),
-			password_hash = COALESCE($6, password_hash),
-			status = COALESCE($7, status),
+			password_hash = COALESCE($5, password_hash),
+			status = COALESCE($6, status),
 			updated_at = CASE WHEN email IS DISTINCT FROM COALESCE($2, email)
 				OR first_name IS DISTINCT FROM COALESCE($3, first_name)
 				OR last_name IS DISTINCT FROM COALESCE($4, last_name)
-				OR role IS DISTINCT FROM COALESCE($5, role)
-				OR password_hash IS DISTINCT FROM COALESCE($6, password_hash)
-				OR status IS DISTINCT FROM COALESCE($7, status)
+				OR password_hash IS DISTINCT FROM COALESCE($5, password_hash)
+				OR status IS DISTINCT FROM COALESCE($6, status)
 				THEN NOW() ELSE updated_at END
 		WHERE id = $1
 		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, role, passwordHash, status).Scan(
+	`, id, email, firstName, lastName, passwordHash, status).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -170,20 +168,19 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 	return &u, nil
 }
 
-func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, role, passwordHash, status string) (*models.User, error) {
+func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*models.User, error) {
 	var u models.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = $2,
 			first_name = $3,
 			last_name = $4,
-			role = $5,
-			password_hash = $6,
-			status = $7,
+			password_hash = $5,
+			status = $6,
 			updated_at = NOW()
 		WHERE id = $1
 		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, role, passwordHash, status).Scan(
+	`, id, email, firstName, lastName, passwordHash, status).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
