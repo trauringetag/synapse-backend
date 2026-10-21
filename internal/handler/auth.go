@@ -118,7 +118,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		passwordErr = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
 	}
-	if err != nil || passwordErr != nil {
+	if err != nil || passwordErr != nil || user.Status != models.StatusActive {
 		httputil.Error(w, http.StatusUnauthorized, messages.InvalidCredentials, nil)
 		return
 	}
@@ -133,36 +133,50 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	reject := func() {
+		auth.ClearTokenCookies(w, h.cfg)
+		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+	}
 	raw, err := auth.ReadCookie(r, auth.RefreshCookie)
 	if err != nil || raw == "" {
-		httputil.Error(w, http.StatusUnauthorized, messages.MissingRefreshTokenCookie, nil)
+		reject()
 		return
 	}
 	claims, err := auth.Parse(h.cfg, raw, "refresh")
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+		reject()
 		return
 	}
 	hash := auth.HashToken(raw)
 	stored, err := h.tokens.GetActive(r.Context(), hash)
-	if err != nil || stored.Revoked || time.Now().After(stored.ExpiresAt) {
-		httputil.Error(w, http.StatusUnauthorized, messages.RevokedOrUnknownRefreshToken, nil)
+	if err != nil || stored.Revoked || !time.Now().Before(stored.ExpiresAt) {
+		reject()
 		return
 	}
-	_ = h.tokens.Revoke(r.Context(), hash)
 
 	id, err := repository.UUIDFromString(claims.Subject)
-	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
+	if err != nil || id != stored.UserID {
+		reject()
 		return
 	}
 	user, err := h.users.GetByID(r.Context(), id)
 	if err != nil {
-		httputil.Error(w, http.StatusUnauthorized, messages.UserNotFound, nil)
+		_ = h.tokens.Revoke(r.Context(), hash)
+		reject()
+		return
+	}
+	if user.Status != models.StatusActive {
+		_ = h.tokens.RevokeAllForUser(r.Context(), user.ID)
+		auth.ClearTokenCookies(w, h.cfg)
+		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+		return
+	}
+	if err := h.tokens.Revoke(r.Context(), hash); err != nil {
+		reject()
 		return
 	}
 	if err := h.issueSession(w, r, user); err != nil {
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
+		reject()
 		return
 	}
 	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
@@ -177,6 +191,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, user *models.User) error {
+	if user == nil || user.Status != models.StatusActive {
+		return repository.ErrNotFound
+	}
 	pair, err := auth.IssuePair(h.cfg, user.ID, user.Email, user.Role)
 	if err != nil {
 		return err
