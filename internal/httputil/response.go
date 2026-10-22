@@ -32,6 +32,8 @@ func Error(w http.ResponseWriter, status int, msg string, details map[string][]s
 		title = "CONFLICT"
 	case http.StatusInternalServerError:
 		title = "INTERNAL_SERVER_ERROR"
+	case http.StatusServiceUnavailable:
+		title = "SERVICE_UNAVAILABLE"
 	}
 
 	JSON(w, status, ErrorBody{

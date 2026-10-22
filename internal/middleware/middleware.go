@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/httputil"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 	"github.com/trauringetag/synapse-backend/internal/models"
+	"github.com/trauringetag/synapse-backend/internal/repository"
 )
 
 type ctxKey string
@@ -43,7 +45,7 @@ func JSONContentType(next http.Handler) http.Handler {
 	})
 }
 
-func Authenticate(cfg *config.Config) func(http.Handler) http.Handler {
+func Authenticate(cfg *config.Config, users *repository.UserRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := auth.ReadCookie(r, auth.AccessCookie)
@@ -53,15 +55,28 @@ func Authenticate(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 			claims, err := auth.Parse(cfg, raw, "access")
 			if err != nil {
-				httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+				httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredAccessToken, nil)
 				return
 			}
 			id, err := uuid.Parse(claims.Subject)
-			if err != nil {
+			if err != nil || id == uuid.Nil {
 				httputil.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
 				return
 			}
-			p := &Principal{ID: id, Email: claims.Email, Role: claims.Role}
+			user, err := users.GetByID(r.Context(), id)
+			if err != nil {
+				if errors.Is(err, repository.ErrNotFound) {
+					httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+					return
+				}
+				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				return
+			}
+			if user.Status != models.StatusActive {
+				httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+				return
+			}
+			p := &Principal{ID: user.ID, Email: user.Email, Role: user.Role}
 			ctx := context.WithValue(r.Context(), userKey, p)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

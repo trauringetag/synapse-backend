@@ -65,11 +65,16 @@ func sign(cfg *config.Config, userID uuid.UUID, email, role, tokenType, jti stri
 
 func Parse(cfg *config.Config, tokenString, expectedType string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (any, error) {
-		if t.Method != jwt.SigningMethodHS256 {
+		if t.Method != jwt.SigningMethodHS256 || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, fmt.Errorf("Неожиданный метод подписания")
 		}
 		return cfg.JWTSecret, nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuer("synapse-backend"),
+		jwt.WithAudience(expectedType),
+		jwt.WithExpirationRequired(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -78,8 +83,8 @@ func Parse(cfg *config.Config, tokenString, expectedType string) (*Claims, error
 		return nil, fmt.Errorf("Недопустимый токен")
 	}
 	aud, err := claims.GetAudience()
-	if err != nil || len(aud) == 0 || aud[0] != expectedType {
-		return nil, fmt.Errorf("Недопустимый тип токена")
+	if err != nil || len(aud) != 1 || aud[0] != expectedType {
+		return nil, fmt.Errorf("Недопустимое назначение токена")
 	}
 	return claims, nil
 }

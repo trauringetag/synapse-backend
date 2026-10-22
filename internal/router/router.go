@@ -57,7 +57,7 @@ func New(cfg *config.Config, users *repository.UserRepository, tokens *repositor
 		r.Post("/logout", authH.Logout)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Authenticate(cfg))
+			r.Use(middleware.Authenticate(cfg, users))
 			r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 			r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
 			r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)

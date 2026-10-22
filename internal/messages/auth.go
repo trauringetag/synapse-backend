@@ -3,12 +3,14 @@ package messages
 const (
 	InvalidCredentials = "Неверные данные авторизации (email или пароль)"
 
-	Unauthorized            = "Не авторизован"
-	AuthorizationRequired   = "Необходима авторизация для получения доступа"
-	InsufficientPermissions = "Недостаточно прав"
+	Unauthorized              = "Не авторизован"
+	AuthenticationUnavailable = "Проверка авторизации временно недоступна"
+	AuthorizationRequired     = "Необходима авторизация для получения доступа"
+	InsufficientPermissions   = "Недостаточно прав"
 
-	FailedToIssueTokens = "Не удалось выпустить токены"
-	InvalidSubjectToken = "Недопустимый токен субъекта"
+	FailedToIssueTokens         = "Не удалось выпустить токены"
+	InvalidSubjectToken         = "Недопустимый токен субъекта"
+	InvalidOrExpiredAccessToken = "Недействительный или просроченный токен доступа"
 
 	MissingRefreshTokenCookie    = "Отсутствует cookie-файл токена обновления"
 	InvalidOrExpiredRefreshToken = "Недействительный или просроченный токен обновления"
