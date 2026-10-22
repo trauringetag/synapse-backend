@@ -11,10 +11,10 @@ const (
 	FailedToIssueTokens         = "Не удалось выпустить токены"
 	FailedToRevokeRefreshToken  = "Не удалось завершить сессию. Повторите попытку позже"
 	InvalidSubjectToken         = "Недопустимый токен субъекта"
-	InvalidOrExpiredAccessToken = "Недействительный или просроченный токен доступа"
+	InvalidOrExpiredAccessToken = "Недействительный или просроченный Access-токен"
 
 	MissingRefreshTokenCookie    = "Отсутствует cookie-файл токена обновления"
-	InvalidOrExpiredRefreshToken = "Недействительный или просроченный токен обновления"
+	InvalidOrExpiredRefreshToken = "Недействительный или просроченный Refresh-токен"
 	RevokedOrUnknownRefreshToken = "Токен обновления отозван или неизвестен"
 
 	InvalidAdminToken = "Токен регистрации администратора не передан, либо является недействительным"
