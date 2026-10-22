@@ -2,6 +2,8 @@ package handler
 
 import (
 	"crypto/subtle"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -127,7 +129,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.JSON(w, http.StatusOK, map[string]any{
-		"message": "В системе",
+		"message": "Авторизация успешна",
 		"user":    user,
 	})
 }
@@ -147,44 +149,51 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		reject()
 		return
 	}
-	hash := auth.HashToken(raw)
-	stored, err := h.tokens.GetActive(r.Context(), hash)
-	if err != nil || stored.Revoked || !time.Now().Before(stored.ExpiresAt) {
-		reject()
-		return
-	}
-
 	id, err := repository.UUIDFromString(claims.Subject)
-	if err != nil || id != stored.UserID {
-		reject()
-		return
-	}
-	user, err := h.users.GetByID(r.Context(), id)
 	if err != nil {
-		_ = h.tokens.Revoke(r.Context(), hash)
 		reject()
 		return
 	}
-	if user.Status != models.StatusActive {
-		_ = h.tokens.RevokeAllForUser(r.Context(), user.ID)
+	var pair *auth.Pair
+	_, err = h.tokens.Rotate(r.Context(), auth.HashToken(raw), id, func(user *models.User) (string, time.Time, error) {
+		var issueErr error
+		pair, issueErr = auth.IssuePair(h.cfg, user.ID, user.Email, user.Role)
+		if issueErr != nil {
+			return "", time.Time{}, issueErr
+		}
+		return auth.HashToken(pair.RefreshToken), pair.RefreshExp, nil
+	})
+	if err != nil {
 		auth.ClearTokenCookies(w, h.cfg)
-		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+		if errors.Is(err, repository.ErrRefreshTokenReplay) {
+			log.Printf("security_event=refresh_token_reuse user_id=%s", id.String())
+			httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+			return
+		}
+		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrInactiveTokenUser) {
+			if errors.Is(err, repository.ErrInactiveTokenUser) {
+				log.Printf("security_event=refresh_denied_inactive_user user_id=%s", id.String())
+			}
+			httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+			return
+		}
+		log.Printf("event=refresh_rotation_failed user_id=%s error_type=%T", id.String(), err)
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
 		return
 	}
-	if err := h.tokens.Revoke(r.Context(), hash); err != nil {
-		reject()
-		return
-	}
-	if err := h.issueSession(w, r, user); err != nil {
-		reject()
-		return
-	}
+	auth.SetTokenCookies(w, h.cfg, pair)
 	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	if raw, err := auth.ReadCookie(r, auth.RefreshCookie); err == nil && raw != "" {
-		_ = h.tokens.Revoke(r.Context(), auth.HashToken(raw))
+	raw, cookieErr := auth.ReadCookie(r, auth.RefreshCookie)
+	if cookieErr == nil && raw != "" {
+		if err := h.tokens.Revoke(r.Context(), auth.HashToken(raw)); err != nil {
+			log.Printf("event=logout_refresh_revoke_failed error_type=%T", err)
+			auth.ClearTokenCookies(w, h.cfg)
+			httputil.Error(w, http.StatusInternalServerError, messages.FailedToRevokeRefreshToken, nil)
+			return
+		}
 	}
 	auth.ClearTokenCookies(w, h.cfg)
 	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})

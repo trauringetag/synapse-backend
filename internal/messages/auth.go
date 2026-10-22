@@ -9,6 +9,7 @@ const (
 	InsufficientPermissions   = "Недостаточно прав"
 
 	FailedToIssueTokens         = "Не удалось выпустить токены"
+	FailedToRevokeRefreshToken  = "Не удалось завершить сессию. Повторите попытку позже"
 	InvalidSubjectToken         = "Недопустимый токен субъекта"
 	InvalidOrExpiredAccessToken = "Недействительный или просроченный токен доступа"
 

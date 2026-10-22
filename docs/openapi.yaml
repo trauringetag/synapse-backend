@@ -361,7 +361,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: В системе
+                    example: Авторизация успешна
                   user:
                     $ref: '#/components/schemas/User'
         '400':
