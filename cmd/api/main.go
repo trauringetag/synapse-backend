@@ -19,7 +19,7 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Config: %v", err)
+		log.Fatalf("Конфигурация: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -27,7 +27,7 @@ func main() {
 
 	pool, err := db.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Database: %v", err)
+		log.Fatalf("База данных: %v", err)
 	}
 	defer pool.Close()
 
@@ -45,7 +45,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Listening on :%s (env=%s)", cfg.AppPort, cfg.AppEnv)
+		log.Printf("Прослушивание на :%s (env=%s)", cfg.AppPort, cfg.AppEnv)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
 		}

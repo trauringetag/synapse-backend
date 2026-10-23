@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/config"
+	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
 type Claims struct {
@@ -66,7 +67,7 @@ func sign(cfg *config.Config, userID uuid.UUID, email, role, tokenType, jti stri
 func Parse(cfg *config.Config, tokenString, expectedType string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (any, error) {
 		if t.Method != jwt.SigningMethodHS256 || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("Неожиданный метод подписания")
+			return nil, fmt.Errorf(messages.UnexpectedSigningMethod)
 		}
 		return cfg.JWTSecret, nil
 	},
@@ -80,11 +81,11 @@ func Parse(cfg *config.Config, tokenString, expectedType string) (*Claims, error
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return nil, fmt.Errorf("Недопустимый токен")
+		return nil, fmt.Errorf(messages.InvalidToken)
 	}
 	aud, err := claims.GetAudience()
 	if err != nil || len(aud) != 1 || aud[0] != expectedType {
-		return nil, fmt.Errorf("Недопустимое назначение токена")
+		return nil, fmt.Errorf(messages.InvalidTokenPurpose)
 	}
 	return claims, nil
 }

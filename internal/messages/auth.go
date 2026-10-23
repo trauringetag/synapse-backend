@@ -13,9 +13,13 @@ const (
 	InvalidSubjectToken         = "Недопустимый токен субъекта"
 	InvalidOrExpiredAccessToken = "Недействительный или просроченный Access-токен"
 
-	MissingRefreshTokenCookie    = "Отсутствует cookie-файл токена обновления"
+	MissingRefreshTokenCookie    = "Отсутствует Cookie-файл Refresh-токена"
 	InvalidOrExpiredRefreshToken = "Недействительный или просроченный Refresh-токен"
-	RevokedOrUnknownRefreshToken = "Токен обновления отозван или неизвестен"
+	RevokedOrUnknownRefreshToken = "Refresh-токен отозван или неизвестен"
 
 	InvalidAdminToken = "Токен регистрации администратора не передан, либо является недействительным"
+
+	UnexpectedSigningMethod = "Неожиданный метод подписания"
+	InvalidToken            = "Недопустимый токен"
+	InvalidTokenPurpose     = "Недопустимое назначение токена"
 )
