@@ -41,6 +41,9 @@ func Load() (*Config, error) {
 	if secret == "" {
 		return nil, fmt.Errorf("Необходимо указать JWT_SECRET")
 	}
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET должен содержать не менее 32 символов для безопасной работы алгоритма HS256")
+	}
 
 	adminToken := env("ADMIN_REGISTER_TOKEN", "")
 	if adminToken == "" {
