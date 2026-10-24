@@ -58,7 +58,11 @@ func JSONContentType(next http.Handler) http.Handler {
 	})
 }
 
-func Authenticate(cfg *config.Config, users *repository.UserRepository) func(http.Handler) http.Handler {
+type UserLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
+}
+
+func Authenticate(cfg *config.Config, users UserLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := auth.ReadCookie(r, auth.AccessCookie)
@@ -94,6 +98,10 @@ func Authenticate(cfg *config.Config, users *repository.UserRepository) func(htt
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func ContextWithUser(ctx context.Context, p *Principal) context.Context {
+	return context.WithValue(ctx, userKey, p)
 }
 
 func RequireRoles(roles ...string) func(http.Handler) http.Handler {

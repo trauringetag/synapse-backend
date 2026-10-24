@@ -21,11 +21,11 @@ import (
 
 type AuthHandler struct {
 	cfg    *config.Config
-	users  *repository.UserRepository
-	tokens *repository.TokenRepository
+	users  UserStore
+	tokens TokenStore
 }
 
-func NewAuthHandler(cfg *config.Config, users *repository.UserRepository, tokens *repository.TokenRepository) *AuthHandler {
+func NewAuthHandler(cfg *config.Config, users UserStore, tokens TokenStore) *AuthHandler {
 	return &AuthHandler{cfg: cfg, users: users, tokens: tokens}
 }
 

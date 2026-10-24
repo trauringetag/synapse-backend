@@ -17,11 +17,11 @@ import (
 )
 
 type UserHandler struct {
-	users  *repository.UserRepository
-	tokens *repository.TokenRepository
+	users  UserStore
+	tokens TokenStore
 }
 
-func NewUserHandler(users *repository.UserRepository, tokens *repository.TokenRepository) *UserHandler {
+func NewUserHandler(users UserStore, tokens TokenStore) *UserHandler {
 	return &UserHandler{users: users, tokens: tokens}
 }
 
