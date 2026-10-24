@@ -13,6 +13,20 @@ info:
     Флаги куки: `HttpOnly`, `Secure` (если `COOKIE_SECURE=true`), `SameSite` (Lax/Strict), `Path=/api/v1/`.
 
     CORS настроен с `Access-Control-Allow-Credentials: true` и явным списком разрешенных источников (origin allow-list).
+
+    **Фактические ограничения и известные расхождения с предыдущей версией спецификации**
+
+    - `GET /api/v1/csrf` — endpoint выдачи CSRF-токена. Ответ содержит `csrf_token` и устанавливает cookie `csrf_token` (не HttpOnly). Проверяется разрешённый `Origin`; только если `Origin` отсутствует, допускается резервная проверка origin из `Referer`. При отсутствии обоих заголовков или при запрещённом источнике возвращается `403`. Разрешённый `Referer` не может переопределить явно запрещённый `Origin`.
+    - CSRF-проверка применяется ко всем запросам, меняющим состояние (`POST`, `PUT`, `PATCH`, `DELETE`), включая публичные `/register`, `/register-admin`, `/login`, `/refresh` и `/logout`. Нужны разрешённый `Origin` (либо допустимый `Referer` при отсутствии `Origin`), cookie `csrf_token` и совпадающий заголовок `X-CSRF-Token`. Одного CORS или `SameSite` недостаточно. Поэтому `security: []` у публичных endpoint-ов означает отсутствие access/refresh-аутентификации, но не отсутствие CSRF-проверки.
+    - JSON-тело ограничено 1 MiB на общем HTTP-уровне. Превышение лимита возвращает `413 PAYLOAD_TOO_LARGE`; некорректный JSON, неизвестные поля и несколько JSON-значений в одном теле возвращают `400 VALIDATION_FAILED`.
+    - На `/login`, `/register`, `/register-admin` и `/refresh` установлен PostgreSQL-backed fixed-window rate limiter, общий для экземпляров сервиса. При превышении возвращается `429 RATE_LIMITED` с `Retry-After`. Начальные лимиты: login — 10 за 15 минут на IP + нормализованный email; регистрация и регистрация администратора — по 10 за час на IP; refresh — 30 в минуту по хешу refresh-cookie (если cookie отсутствует, ключ строится по IP). Параметры задаются `LOGIN_RATE_LIMIT`, `REGISTER_RATE_LIMIT`, `REFRESH_RATE_LIMIT`.
+    - **Ограничение login отличается от требуемой политики «10 неуспешных попыток»**: текущий счётчик увеличивается для каждого запроса к `/login`, а не только после неуспешной проверки учётных данных. Это намеренное замечание о фактической реализации, а не гарантия лимита только на ошибки входа.
+    - В предыдущем описании `/logout` схема `refreshCookie` выглядела обязательной, но обработчик фактически допускает запрос без refresh-cookie: в этом случае он очищает cookie и отвечает `200`. Если cookie присутствует, отзыв токена выполняется на сервере; при ошибке БД возвращается `500`.
+    - Документация endpoint-ов ранее не перечисляла общие ответы middleware и инфраструктуры: `403` при CSRF-ошибке, `413` при слишком большом теле, `429` при превышении лимита, `500` при внутренней ошибке и `503` при недоступности БД во время проверки авторизации/лимитера. Они могут появляться помимо бизнес-ответов, указанных у конкретного пути.
+    - `page` по умолчанию равен `1`, `limit` — `10`, максимальный `limit` — `100`; `search` ограничен 200 символами. Некорректные `page`, `limit`, `role`, `status` или слишком длинный `search` приводят к `400`.
+    - Аутентификация защищённых маршрутов использует cookie `access_token`, затем проверяет JWT и загружает актуального пользователя из БД. Пользователь должен существовать и иметь статус `active`; роль берётся из БД. Ошибка чтения пользователя из БД закрывает доступ и может вернуть `503`. Недостаточная роль возвращает `403`.
+
+    Это описание фиксирует выявленные различия между контрактом OpenAPI и текущим кодом. При изменении реализации спецификацию необходимо обновлять вместе с обработчиками и middleware.
 servers:
   - url: /api/v1
     description: Версия 1
@@ -247,12 +261,47 @@ components:
         type: string
         example: no-store, no-cache, must-revalidate, private
 paths:
+  /csrf:
+    get:
+      tags:
+        - Auth
+      summary: Получение CSRF-токена
+      description: |
+        Выдаёт подписанный CSRF-токен в JSON и устанавливает cookie `csrf_token` на срок до одного часа.
+        Для изменяющих состояние запросов передавайте полученное значение в `X-CSRF-Token`; cookie должна
+        также автоматически отправляться браузером. Этот endpoint требует явный разрешённый `Origin` из
+        `CORS_ORIGINS`; запрос без `Origin` или с неразрешённым значением отклоняется с `403`. Endpoint не требует access-токена.
+      security: []
+      responses:
+        '403':
+          description: Отсутствует Origin или источник не входит в CORS_ORIGINS
+        '200':
+          description: CSRF-токен выдан
+          headers:
+            Set-Cookie:
+              description: Cookie csrf_token (не HttpOnly), Path=/api/v1/, срок действия 1 час
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [csrf_token]
+                properties:
+                  csrf_token:
+                    type: string
+        '500':
+          description: Не удалось сгенерировать CSRF-токен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /register:
     post:
       tags:
         - Auth
       summary: Регистрация стандартного пользователя
-      description: Создает пользователя с ролью `user`. Не требует куки.
+      description: Создает пользователя с ролью `user`. Не требует access/refresh-аутентификации, но требует CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
       security: []
       requestBody:
         required: true
@@ -289,7 +338,7 @@ paths:
       summary: Регистрация администратора
       description: |
         Создает пользователя с ролью `admin`. Требуется секретный токен регистрации администратора 
-        в заголовке `X-Admin-Token`. Не требует куки.
+        в заголовке `X-Admin-Token`. Не требует access/refresh-аутентификации, но требует CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
       security: []
       parameters:
         - in: header
@@ -333,7 +382,7 @@ paths:
       summary: Вход в систему (любая роль)
       description: |
         Проверяет учетные данные и устанавливает HttpOnly куки `access_token` и `refresh_token`.
-        Клиентский JavaScript не может прочитать эти куки. Используйте `credentials: include` на фронтенде.
+        Клиентский JavaScript не может прочитать access/refresh-cookie. Используйте `credentials: include` на фронтенде. Перед запросом получите CSRF-токен через `GET /csrf` и передайте его в `X-CSRF-Token`; запрос также должен содержать разрешённый Origin/Referer.
       security: []
       requestBody:
         required: true
@@ -382,8 +431,7 @@ paths:
         - Auth
       summary: Ротация токенов доступа и обновления
       description: |
-        **Требуется кука `refresh_token`.** Считывает JWT обновления, проверяет, что он не отозван 
-        в базе данных, затем выпускает новую пару куки (ротация).
+        **Требуется кука `refresh_token`.** Проверяет JWT и наличие токена в БД, атомарно отзывает старый токен и выпускает новую пару cookie. Требуются CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
       security:
         - refreshCookie: []
       responses:
@@ -412,8 +460,7 @@ paths:
         - Auth
       summary: Выход из системы
       description: |
-        Очищает куки токенов (устанавливает истекшие Set-Cookie) и **отзывает токен обновления на стороне сервера**
-        (добавляет в черный список БД). Отправьте куку `refresh_token`, если она присутствует.
+        Очищает cookie токенов (устанавливает истекшие Set-Cookie). Если cookie `refresh_token` присутствует, отзывает токен на сервере. Refresh-cookie необязательна для самого вызова; требуются CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
       security:
         - refreshCookie: []
       responses:

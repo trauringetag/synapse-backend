@@ -78,7 +78,12 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"status": {messages.StatusInvalidValue}})
 		return
 	}
-	result, err := h.users.List(r.Context(), repository.UserListFilter{Page: page, Limit: limit, Search: strings.TrimSpace(q.Get("search")), Role: role, Status: status})
+	search := strings.TrimSpace(q.Get("search"))
+	if len(search) > 200 {
+		httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, nil)
+		return
+	}
+	result, err := h.users.List(r.Context(), repository.UserListFilter{Page: page, Limit: limit, Search: search, Role: role, Status: status})
 	if err != nil {
 		httputil.Error(w, http.StatusInternalServerError, messages.FailedToGetUsersList, nil)
 		return
@@ -89,7 +94,7 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req putUserRequest
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
@@ -140,7 +145,7 @@ func (h *UserHandler) PutMe(w http.ResponseWriter, r *http.Request) {
 		LastName  string `json:"last_name"`
 	}
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	email, first, last := strings.ToLower(strings.TrimSpace(req.Email)), strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName)
@@ -179,7 +184,7 @@ func (h *UserHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		LastName  *string `json:"last_name"`
 	}
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	if req.Email == nil && req.FirstName == nil && req.LastName == nil {
@@ -253,7 +258,7 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 	var req putUserRequest
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
@@ -309,7 +314,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req patchUserRequest
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	var email, firstName, lastName, passwordHash, status *string

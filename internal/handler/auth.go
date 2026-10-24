@@ -14,6 +14,7 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/config"
 	"github.com/trauringetag/synapse-backend/internal/httputil"
 	"github.com/trauringetag/synapse-backend/internal/messages"
+	"github.com/trauringetag/synapse-backend/internal/middleware"
 	"github.com/trauringetag/synapse-backend/internal/models"
 	"github.com/trauringetag/synapse-backend/internal/repository"
 )
@@ -57,7 +58,7 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 	var req registerRequest
 
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 
@@ -69,11 +70,20 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 	if email == "" || !strings.Contains(email, "@") {
 		errors["email"] = []string{messages.InvalidEmail}
 	}
-	if len(req.Password) < 8 {
+	if len(email) > 255 {
+		errors["email"] = []string{messages.InvalidEmail}
+	}
+	if len(req.Password) < 8 || len(req.Password) > 72 {
 		errors["password"] = []string{messages.PasswordTooShort}
+	}
+	if len(firstName) > 255 {
+		errors["first_name"] = []string{messages.FirstNameRequired}
 	}
 	if firstName == "" {
 		errors["first_name"] = []string{messages.FirstNameRequired}
+	}
+	if len(lastName) > 255 {
+		errors["last_name"] = []string{messages.LastNameRequired}
 	}
 	if lastName == "" {
 		errors["last_name"] = []string{messages.LastNameRequired}
@@ -111,10 +121,14 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := httputil.Decode(r, &req); err != nil {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		httputil.DecodeError(w, err)
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if len(email) > 255 || len(req.Password) > 72 {
+		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		return
+	}
 	user, err := h.users.GetByEmail(r.Context(), email)
 	var passwordErr error
 	if err == nil {
@@ -129,7 +143,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.JSON(w, http.StatusOK, map[string]any{
-		"message": "Авторизация успешна",
+		"message": messages.AuthorizationSuccessful,
 		"user":    user,
 	})
 }
@@ -212,4 +226,14 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, user 
 	}
 	auth.SetTokenCookies(w, h.cfg, pair)
 	return nil
+}
+
+func (h *AuthHandler) CSRFToken(w http.ResponseWriter, r *http.Request) {
+	token, err := middleware.IssueCSRF(h.cfg.JWTSecret)
+	if err != nil {
+		httputil.Error(w, http.StatusInternalServerError, messages.FailedToPrepareCSRFProtection, nil)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "csrf_token", Value: token, Path: "/api/v1/", Secure: h.cfg.CookieSecure, HttpOnly: false, SameSite: h.cfg.CookieSameSite, MaxAge: 3600})
+	httputil.JSON(w, http.StatusOK, map[string]string{"csrf_token": token})
 }

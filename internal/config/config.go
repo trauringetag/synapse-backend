@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ type Config struct {
 	CookieDomain       string
 	CookiePath         string
 	CORSOrigins        []string
+	LoginRateLimit     int
+	RegisterRateLimit  int
+	RefreshRateLimit   int
 }
 
 func Load() (*Config, error) {
@@ -89,6 +93,9 @@ func Load() (*Config, error) {
 		CookieDomain:       env("COOKIE_DOMAIN", ""),
 		CookiePath:         "/api/v1/",
 		CORSOrigins:        origins,
+		LoginRateLimit:     intEnv("LOGIN_RATE_LIMIT", 10),
+		RegisterRateLimit:  intEnv("REGISTER_RATE_LIMIT", 10),
+		RefreshRateLimit:   intEnv("REFRESH_RATE_LIMIT", 30),
 	}, nil
 }
 
@@ -97,4 +104,12 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func intEnv(key string, fallback int) int {
+	v, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
+	if err != nil || v < 1 {
+		return fallback
+	}
+	return v
 }

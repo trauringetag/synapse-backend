@@ -22,4 +22,6 @@ const (
 	UnexpectedSigningMethod = "Неожиданный метод подписания"
 	InvalidToken            = "Недопустимый токен"
 	InvalidTokenPurpose     = "Недопустимое назначение токена"
+
+	FailedToPrepareCSRFProtection = "Не удалось подготовить CSRF-защиту запроса"
 )

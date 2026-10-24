@@ -33,7 +33,7 @@ func main() {
 
 	users := repository.NewUserRepository(pool)
 	tokens := repository.NewTokenRepository(pool)
-	handler := router.New(cfg, users, tokens, docs.OpenAPI)
+	handler := router.New(cfg, users, tokens, pool, docs.OpenAPI)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,

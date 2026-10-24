@@ -2,7 +2,11 @@ package httputil
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+
+	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
 type ErrorBody struct {
@@ -30,6 +34,10 @@ func Error(w http.ResponseWriter, status int, msg string, details map[string][]s
 		title = "NOT_FOUND"
 	case http.StatusConflict:
 		title = "CONFLICT"
+	case http.StatusTooManyRequests:
+		title = "RATE_LIMITED"
+	case http.StatusRequestEntityTooLarge:
+		title = "PAYLOAD_TOO_LARGE"
 	case http.StatusInternalServerError:
 		title = "INTERNAL_SERVER_ERROR"
 	case http.StatusServiceUnavailable:
@@ -46,5 +54,24 @@ func Error(w http.ResponseWriter, status int, msg string, details map[string][]s
 func Decode(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New(messages.MultipleJSONValues)
+		}
+		return err
+	}
+	return nil
+}
+
+func DecodeError(w http.ResponseWriter, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		Error(w, http.StatusRequestEntityTooLarge, messages.RequestEntityTooLarge, nil)
+		return
+	}
+	Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
 }
