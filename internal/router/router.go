@@ -18,10 +18,11 @@ import (
 
 func New(cfg *config.Config, users *repository.UserRepository, tokens *repository.TokenRepository, pool *pgxpool.Pool, openAPI []byte) http.Handler {
 	authH := handler.NewAuthHandler(cfg, users, tokens)
-	userH := handler.NewUserHandler(users)
+	userH := handler.NewUserHandler(users, tokens)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
+	r.Use(chimw.RealIP)
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.SecurityHeaders)

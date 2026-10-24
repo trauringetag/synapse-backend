@@ -188,6 +188,10 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		auth.ClearTokenCookies(w, h.cfg)
 		if errors.Is(err, repository.ErrRefreshTokenReplay) {
 			log.Printf("security_event=refresh_token_reuse user_id=%s", id.String())
+			if revokeErr := h.tokens.RevokeAllForUser(r.Context(), id); revokeErr != nil {
+				log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", id.String(), revokeErr)
+			}
+			auth.ClearTokenCookies(w, h.cfg)
 			httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 			return
 		}

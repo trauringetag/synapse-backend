@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,11 +17,12 @@ import (
 )
 
 type UserHandler struct {
-	users *repository.UserRepository
+	users  *repository.UserRepository
+	tokens *repository.TokenRepository
 }
 
-func NewUserHandler(users *repository.UserRepository) *UserHandler {
-	return &UserHandler{users: users}
+func NewUserHandler(users *repository.UserRepository, tokens *repository.TokenRepository) *UserHandler {
+	return &UserHandler{users: users, tokens: tokens}
 }
 
 type putUserRequest struct {
@@ -375,6 +377,11 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.Error(w, http.StatusInternalServerError, messages.FailedToUpdateUser, nil)
 		return
+	}
+	if passwordHash != nil {
+		if revokeErr := h.tokens.RevokeAllForUser(r.Context(), id); revokeErr != nil {
+			log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", id.String(), revokeErr)
+		}
 	}
 	httputil.JSON(w, http.StatusOK, user)
 }
