@@ -276,3 +276,28 @@ func validCSRF(secret []byte, token string) bool {
 	mac.Write([]byte(p[0]))
 	return hmac.Equal(sig, mac.Sum(nil))
 }
+
+func AccountGlobalKey(r *http.Request) string {
+	var body struct {
+		Email string `json:"email"`
+	}
+	return "login_global:" + strings.ToLower(strings.TrimSpace(body.Email))
+}
+
+func UserKey(r *http.Request) string {
+	p, ok := FromContext(r.Context())
+	if !ok {
+		return IPKey(r)
+	}
+	return "user:" + p.ID.String()
+}
+
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}

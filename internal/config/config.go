@@ -12,21 +12,23 @@ import (
 )
 
 type Config struct {
-	AppPort            string
-	AppEnv             string
-	DatabaseURL        string
-	JWTSecret          []byte
-	AccessTTL          time.Duration
-	RefreshTTL         time.Duration
-	AdminRegisterToken string
-	CookieSecure       bool
-	CookieSameSite     http.SameSite
-	CookieDomain       string
-	CookiePath         string
-	CORSOrigins        []string
-	LoginRateLimit     int
-	RegisterRateLimit  int
-	RefreshRateLimit   int
+	AppPort                string
+	AppEnv                 string
+	DatabaseURL            string
+	JWTSecret              []byte
+	AccessTTL              time.Duration
+	RefreshTTL             time.Duration
+	AdminRegisterToken     string
+	CookieSecure           bool
+	CookieSameSite         http.SameSite
+	CookieDomain           string
+	CookiePath             string
+	CORSOrigins            []string
+	LoginRateLimit         int
+	RegisterRateLimit      int
+	RefreshRateLimit       int
+	LogoutRateLimit        int
+	AuthenticatedRateLimit int
 }
 
 func Load() (*Config, error) {
@@ -81,21 +83,23 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		AppPort:            env("APP_PORT", "8080"),
-		AppEnv:             env("APP_ENV", "synapse-backend"),
-		DatabaseURL:        dbURL,
-		JWTSecret:          []byte(secret),
-		AccessTTL:          accessTTL,
-		RefreshTTL:         refreshTTL,
-		AdminRegisterToken: adminToken,
-		CookieSecure:       env("COOKIE_SECURE", "true") == "true",
-		CookieSameSite:     sameSite,
-		CookieDomain:       env("COOKIE_DOMAIN", ""),
-		CookiePath:         "/api/v1/",
-		CORSOrigins:        origins,
-		LoginRateLimit:     intEnv("LOGIN_RATE_LIMIT", 10),
-		RegisterRateLimit:  intEnv("REGISTER_RATE_LIMIT", 10),
-		RefreshRateLimit:   intEnv("REFRESH_RATE_LIMIT", 30),
+		AppPort:                env("APP_PORT", "8080"),
+		AppEnv:                 env("APP_ENV", "synapse-backend"),
+		DatabaseURL:            dbURL,
+		JWTSecret:              []byte(secret),
+		AccessTTL:              accessTTL,
+		RefreshTTL:             refreshTTL,
+		AdminRegisterToken:     adminToken,
+		CookieSecure:           env("COOKIE_SECURE", "true") == "true",
+		CookieSameSite:         sameSite,
+		CookieDomain:           env("COOKIE_DOMAIN", ""),
+		CookiePath:             "/api/v1/",
+		CORSOrigins:            origins,
+		LoginRateLimit:         intEnv("LOGIN_RATE_LIMIT", 10),
+		RegisterRateLimit:      intEnv("REGISTER_RATE_LIMIT", 10),
+		RefreshRateLimit:       intEnv("REFRESH_RATE_LIMIT", 30),
+		LogoutRateLimit:        intEnv("LOGOUT_RATE_LIMIT", 10),
+		AuthenticatedRateLimit: intEnv("AUTHENTICATED_RATE_LIMIT", 600),
 	}, nil
 }
 

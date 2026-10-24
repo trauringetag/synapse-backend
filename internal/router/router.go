@@ -24,6 +24,7 @@ func New(cfg *config.Config, users *repository.UserRepository, tokens *repositor
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
+	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.JSONContentType)
 	r.Use(middleware.LimitBody)
 	r.Use(cors.Handler(cors.Options{
@@ -57,12 +58,16 @@ func New(cfg *config.Config, users *repository.UserRepository, tokens *repositor
 			r.Use(middleware.CSRF(cfg))
 			r.With(middleware.RateLimit(pool, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register", authH.Register)
 			r.With(middleware.RateLimit(pool, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register-admin", authH.RegisterAdmin)
-			r.With(middleware.RateLimit(pool, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey)).Post("/login", authH.Login)
+			r.With(middleware.RateLimit(pool, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey)).
+				With(middleware.RateLimit(pool, cfg.LoginRateLimit, time.Hour, middleware.AccountGlobalKey)).
+				Post("/login", authH.Login)
 			r.With(middleware.RateLimit(pool, cfg.RefreshRateLimit, time.Minute, middleware.RefreshKey)).Post("/refresh", authH.Refresh)
-			r.Post("/logout", authH.Logout)
+			r.With(middleware.RateLimit(pool, cfg.LogoutRateLimit, time.Minute, middleware.IPKey)).
+				Post("/logout", authH.Logout)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Authenticate(cfg, users))
+				r.Use(middleware.RateLimit(pool, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey))
 				r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 				r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
 				r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)

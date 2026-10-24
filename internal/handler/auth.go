@@ -130,11 +130,18 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.users.GetByEmail(r.Context(), email)
-	var passwordErr error
-	if err == nil {
-		passwordErr = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
+	var isValidUser bool
+	if err == nil && user.Status == models.StatusActive {
+		isValidUser = true
 	}
-	if err != nil || passwordErr != nil || user.Status != models.StatusActive {
+	var hashToCompare []byte
+	if isValidUser {
+		hashToCompare = []byte(user.PasswordHash)
+	} else {
+		hashToCompare = []byte("$2a$10$Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5")
+	}
+	passwordErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
+	if !isValidUser || passwordErr != nil {
 		httputil.Error(w, http.StatusUnauthorized, messages.InvalidCredentials, nil)
 		return
 	}
