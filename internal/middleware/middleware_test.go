@@ -58,10 +58,10 @@ func TestCacheControlHeaders(t *testing.T) {
 
 		// Проверяем, что заголовки установлены корректно
 		if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
-			t.Errorf("Cache-Control = %v, должен содержать no-store", got)
+			t.Errorf("Cache-Control = %v, должен содержать: no-store", got)
 		}
 		if got := rec.Header().Get("Pragma"); got != "no-cache" {
-			t.Errorf("Pragma = %v, должен быть no-cache", got)
+			t.Errorf("Pragma = %v, должен быть: no-cache", got)
 		}
 		if !nextCalled {
 			t.Error("Следующий handler не был вызван")
@@ -84,7 +84,7 @@ func TestJSONContentType(t *testing.T) {
 
 		// X-Content-Type-Options: nosniff предотвращает MIME-sniffing атаки
 		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-			t.Errorf("X-Content-Type-Options = %v, должен быть nosniff", got)
+			t.Errorf("X-Content-Type-Options = %v, должен быть: nosniff", got)
 		}
 	})
 }
@@ -108,11 +108,11 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 		// X-Frame-Options: DENY - защита от clickjacking атак
 		if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
-			t.Errorf("X-Frame-Options = %v, должен быть DENY", got)
+			t.Errorf("X-Frame-Options = %v, должен быть: DENY", got)
 		}
 		// Referrer-Policy - контроль утечки информации через Referer
 		if got := rec.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
-			t.Errorf("Referrer-Policy = %v, должен быть strict-origin-when-cross-origin", got)
+			t.Errorf("Referrer-Policy = %v, должен быть: strict-origin-when-cross-origin", got)
 		}
 	})
 }
@@ -189,7 +189,7 @@ func TestClientIP(t *testing.T) {
 
 			got := ClientIP(req)
 			if got != tt.want {
-				t.Errorf("ClientIP() = %v, want %v", got, tt.want)
+				t.Errorf("ClientIP() = %v, ожидается: %v", got, tt.want)
 			}
 		})
 	}
@@ -206,7 +206,7 @@ func TestAccountIPKey(t *testing.T) {
 
 		// Ключ должен содержать IP и нормализованный email
 		if !strings.Contains(key, "login:") {
-			t.Error("Ключ должен содержать префикс login:")
+			t.Error("Ключ должен содержать префикс login")
 		}
 		if !strings.Contains(key, "192.168.1.1") {
 			t.Error("Ключ должен содержать IP-адрес")
@@ -235,7 +235,7 @@ func TestIPKey(t *testing.T) {
 
 		key := IPKey(req)
 		if !strings.HasPrefix(key, "ip:10.0.0.1") {
-			t.Errorf("Ключ должен начинаться с ip:10.0.0.1, got %v", key)
+			t.Errorf("Ключ должен начинаться с ip:10.0.0.1, получено: %v", key)
 		}
 	})
 }
@@ -248,7 +248,7 @@ func TestRefreshKey(t *testing.T) {
 
 		key := RefreshKey(req)
 		if !strings.HasPrefix(key, "refresh:") {
-			t.Errorf("Ключ должен начинаться с refresh:, got %v", key)
+			t.Errorf("Ключ должен начинаться с refresh, получено: %v", key)
 		}
 	})
 
@@ -300,7 +300,7 @@ func TestIssueCSRF(t *testing.T) {
 		// Токен должен состоять из nonce и подписи, разделенных точкой
 		parts := strings.Split(token, ".")
 		if len(parts) != 2 {
-			t.Fatalf("CSRF токен должен иметь формат nonce.signature, got %v", token)
+			t.Fatalf("CSRF токен должен иметь формат nonce.signature, получено: %v", token)
 		}
 	})
 
@@ -384,7 +384,7 @@ func TestCSRFMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusNoContent {
-			t.Errorf("Статус = %d, должен быть %d, body=%s", rec.Code, http.StatusNoContent, rec.Body.String())
+			t.Errorf("Статус = %d, должен быть: %d, body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
 		}
 		if !nextCalled {
 			t.Error("Handler должен быть вызван при валидном CSRF")
@@ -422,7 +422,7 @@ func TestCSRFMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("При отсутствии CSRF статус = %d, должен быть 403", rec.Code)
+			t.Errorf("При отсутствии CSRF статус = %d, должен быть: 403", rec.Code)
 		}
 	})
 
@@ -444,7 +444,7 @@ func TestCSRFMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("При несовпадении токенов статус = %d, должен быть 403", rec.Code)
+			t.Errorf("При несовпадении токенов статус = %d, должен быть: 403", rec.Code)
 		}
 	})
 
@@ -464,7 +464,7 @@ func TestCSRFMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("При недопустимом Origin статус = %d, должен быть 403", rec.Code)
+			t.Errorf("При недопустимом Origin статус = %d, должен быть: 403", rec.Code)
 		}
 	})
 }
@@ -505,7 +505,7 @@ func TestRequireRoles(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("Статус = %d, должен быть 403 для обычного пользователя", rec.Code)
+			t.Errorf("Статус = %d, должен быть: 403 для обычного пользователя", rec.Code)
 		}
 	})
 
@@ -521,7 +521,7 @@ func TestRequireRoles(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("Статус = %d, должен быть 401 при отсутствии аутентификации", rec.Code)
+			t.Errorf("Статус = %d, должен быть: 401 при отсутствии аутентификации", rec.Code)
 		}
 	})
 }
@@ -562,14 +562,14 @@ func TestRequireAdmin(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("Обычный пользователь должен получить 403, got %d", rec.Code)
+			t.Errorf("Обычный пользователь должен получить 403, получено: %d", rec.Code)
 		}
 	})
 }
 
 // TestRequireUserOrAdmin тестирует middleware для доступа пользователей и администраторов
 func TestRequireUserOrAdmin(t *testing.T) {
-	t.Run("И пользователь, и администратор имеют доступ", func(t *testing.T) {
+	t.Run("Пользователь и администратор имеют доступ", func(t *testing.T) {
 		for _, role := range []string{"user", "admin"} {
 			nextCalled := false
 			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -604,7 +604,7 @@ func TestFromContext(t *testing.T) {
 			t.Error("Principal должен быть извлечен из контекста")
 		}
 		if got.ID != userID {
-			t.Errorf("ID = %v, want %v", got.ID, userID)
+			t.Errorf("ID = %v, ожидается: %v", got.ID, userID)
 		}
 	})
 
@@ -625,7 +625,7 @@ func TestAuthenticate(t *testing.T) {
 		RefreshTTL: 168 * time.Hour,
 	}
 
-	// newActiveUser создаёт мок с одним активным пользователем.
+	// newActiveUser создает мок с одним активным пользователем.
 	newActiveUser := func() (uuid.UUID, *mockUserLookup) {
 		id := uuid.New()
 		m := newMockUserLookup()
@@ -633,7 +633,7 @@ func TestAuthenticate(t *testing.T) {
 		return id, m
 	}
 
-	t.Run("Успех: валидный access-токен пропускает и кладёт Principal в контекст", func(t *testing.T) {
+	t.Run("Успех: валидный access-токен пропускает и кладет Principal в контекст", func(t *testing.T) {
 		id, mock := newActiveUser()
 		pair, err := auth.IssuePair(cfg, id, "user@example.com", models.RoleUser)
 		if err != nil {
@@ -655,10 +655,10 @@ func TestAuthenticate(t *testing.T) {
 		Authenticate(cfg, mock)(next).ServeHTTP(rec, req) // <-- теперь компилируется
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		if got.ID != id || got.Role != models.RoleUser {
-			t.Errorf("Principal = %+v, хочу id=%s role=user", got, id)
+			t.Errorf("Principal = %+v, ожидается: id = %s, role = user", got, id)
 		}
 	})
 
@@ -666,10 +666,10 @@ func TestAuthenticate(t *testing.T) {
 		_, mock := newActiveUser()
 		rec := httptest.NewRecorder()
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Error("next не должен вызываться без токена")
+			t.Error("Next не должен вызываться без токена")
 		})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/me", nil))
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("статус = %d, хочу 401", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
@@ -679,10 +679,10 @@ func TestAuthenticate(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: "invalid.token.value"})
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Error("next не должен вызываться с битым токеном")
+			t.Error("Next не должен вызываться с битым токеном")
 		})).ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("статус = %d, хочу 401", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
@@ -693,14 +693,14 @@ func TestAuthenticate(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.RefreshToken}) // чужое назначение
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Error("refresh-токен не должен приниматься как access")
+			t.Error("Refresh-токен не должен приниматься как access")
 		})).ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("статус = %d, хочу 401", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
-	t.Run("Пользователь удалён из БД -> 401", func(t *testing.T) {
+	t.Run("Пользователь удален из БД -> 401", func(t *testing.T) {
 		mock := newMockUserLookup() // пустой мок: пользователя нет
 		pair, _ := auth.IssuePair(cfg, uuid.New(), "ghost@example.com", models.RoleUser)
 		rec := httptest.NewRecorder()
@@ -708,7 +708,7 @@ func TestAuthenticate(t *testing.T) {
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("статус = %d, хочу 401", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
@@ -721,20 +721,20 @@ func TestAuthenticate(t *testing.T) {
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("статус = %d, хочу 401 для inactive-пользователя", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 401 для inactive-пользователя", rec.Code)
 		}
 	})
 
-	t.Run("БД недоступна -> 503 (не раскрываем внутреннюю ошибку)", func(t *testing.T) {
+	t.Run("БД недоступна -> 503 (не раскрывается внутренняя ошибка)", func(t *testing.T) {
 		mock := newMockUserLookup()
-		mock.err = errors.New("connection refused")
+		mock.err = errors.New("В соединении отказано")
 		pair, _ := auth.IssuePair(cfg, uuid.New(), "user@example.com", models.RoleUser)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
 		Authenticate(cfg, mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, req)
 		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("статус = %d, хочу 503 при ошибке БД", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 503 при ошибке БД", rec.Code)
 		}
 	})
 }
@@ -746,6 +746,7 @@ type memoryRateLimitStore struct {
 	buckets map[string]memoryRateBucket
 	err     error
 }
+
 type memoryRateBucket struct {
 	start time.Time
 	hits  int
@@ -754,6 +755,7 @@ type memoryRateBucket struct {
 func newMemoryRateLimitStore() *memoryRateLimitStore {
 	return &memoryRateLimitStore{now: time.Now, buckets: make(map[string]memoryRateBucket)}
 }
+
 func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -762,7 +764,7 @@ func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window
 		return 0, s.err
 	}
 	if window <= 0 {
-		return 0, errors.New("window must be positive")
+		return 0, errors.New("Окно должно быть положительным")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -778,7 +780,7 @@ func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window
 
 // TestRateLimit проверяет лимиты, изоляцию ключей, сброс окна и fail-closed без PostgreSQL.
 func TestRateLimit(t *testing.T) {
-	t.Run("разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {
+	t.Run("Разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		called := 0
 		h := RateLimitWithStore(store, 2, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -791,17 +793,17 @@ func TestRateLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 			if rec.Code != want {
-				t.Errorf("запрос %d: статус=%d, ожидается %d", i+1, rec.Code, want)
+				t.Errorf("Запрос %d: статус = %d, ожидается: %d", i+1, rec.Code, want)
 			}
 			if i == 2 && rec.Header().Get("Retry-After") != "60" {
-				t.Errorf("Retry-After=%q, ожидается 60", rec.Header().Get("Retry-After"))
+				t.Errorf("Retry-After = %q, ожидается: 60", rec.Header().Get("Retry-After"))
 			}
 		}
 		if called != 2 {
-			t.Errorf("обработчик вызван %d раз, ожидается 2", called)
+			t.Errorf("Обработчик вызван %d раз, ожидается: 2", called)
 		}
 	})
-	t.Run("разные IP используют разные счетчики", func(t *testing.T) {
+	t.Run("Разные IP используют разные счетчики", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		for _, ip := range []string{"192.0.2.1:1234", "192.0.2.2:1234"} {
@@ -810,11 +812,11 @@ func TestRateLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 			if rec.Code != http.StatusNoContent {
-				t.Errorf("первый запрос IP %s получил %d", ip, rec.Code)
+				t.Errorf("Первый запрос IP %s получил: %d", ip, rec.Code)
 			}
 		}
 	})
-	t.Run("истекшее окно сбрасывает счетчик", func(t *testing.T) {
+	t.Run("Истекшее окно сбрасывает счетчик", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 		store.now = func() time.Time { return now }
@@ -827,17 +829,17 @@ func TestRateLimit(t *testing.T) {
 			return rec
 		}
 		if got := makeReq().Code; got != http.StatusNoContent {
-			t.Fatalf("первый запрос: %d", got)
+			t.Fatalf("Первый запрос: %d", got)
 		}
 		if got := makeReq().Code; got != http.StatusTooManyRequests {
-			t.Fatalf("превышение лимита: %d", got)
+			t.Fatalf("Превышение лимита: %d", got)
 		}
 		now = now.Add(time.Minute)
 		if got := makeReq().Code; got != http.StatusNoContent {
-			t.Fatalf("после окна: %d", got)
+			t.Fatalf("После окна: %d", got)
 		}
 	})
-	t.Run("конкурентные запросы не обходят общий лимит", func(t *testing.T) {
+	t.Run("Конкурентные запросы не обходят общий лимит", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		var allowed int
 		var allowedMu sync.Mutex
@@ -857,37 +859,37 @@ func TestRateLimit(t *testing.T) {
 				rec := httptest.NewRecorder()
 				h.ServeHTTP(rec, req)
 				if rec.Code != http.StatusNoContent && rec.Code != http.StatusTooManyRequests {
-					t.Errorf("неожиданный HTTP статус: %d", rec.Code)
+					t.Errorf("Неожиданный HTTP статус: %d", rec.Code)
 				}
 			}()
 		}
 		wg.Wait()
 		if allowed != 7 {
-			t.Errorf("успешно прошло %d запросов, лимит равен 7", allowed)
+			t.Errorf("Успешно прошло %d запросов, лимит равен: 7", allowed)
 		}
 	})
-	t.Run("ошибка хранилища закрывает доступ с 503", func(t *testing.T) {
+	t.Run("Ошибка хранилища закрывает доступ с 503", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
-		store.err = errors.New("storage unavailable")
+		store.err = errors.New("Хранилище недоступно")
 		called := false
 		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("статус=%d, ожидается 503", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 503", rec.Code)
 		}
 		if called {
-			t.Error("обработчик вызван несмотря на ошибку хранилища")
+			t.Error("Обработчик вызван несмотря на ошибку хранилища")
 		}
 	})
-	t.Run("некорректная конфигурация не отключает защиту молча", func(t *testing.T) {
+	t.Run("Некорректная конфигурация не отключает защиту молча", func(t *testing.T) {
 		h := RateLimitWithStore(newMemoryRateLimitStore(), 0, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Error("обработчик не должен вызываться")
+			t.Error("Обработчик не должен вызываться")
 		}))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("статус=%d, ожидается 503", rec.Code)
+			t.Errorf("Статус = %d, ожидается: 503", rec.Code)
 		}
 	})
 }
@@ -904,10 +906,10 @@ func TestAccountGlobalKey(t *testing.T) {
 	b := AccountGlobalKey(request(`{"email":"bob@example.com","password":"x"}`))
 	c := AccountGlobalKey(request(`{"email":"alice@example.com","password":"y"}`))
 	if a != c {
-		t.Errorf("один email должен давать одинаковый ключ: %q != %q", a, c)
+		t.Errorf("Один email должен давать одинаковый ключ: %q != %q", a, c)
 	}
 	if a == b {
-		t.Errorf("разные email получили одинаковый ключ %q", a)
+		t.Errorf("Разные email получили одинаковый ключ: %q", a)
 	}
 }
 
@@ -922,6 +924,6 @@ func TestAccountIPKeyPreservesBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != body {
-		t.Fatalf("тело изменилось: %q", string(got))
+		t.Fatalf("Тело изменилось: %q", string(got))
 	}
 }

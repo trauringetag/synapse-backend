@@ -42,7 +42,7 @@ func asPrincipal(u *models.User) *middleware.Principal {
 	return &middleware.Principal{ID: u.ID, Email: u.Email, Role: u.Role}
 }
 
-// withUser кладёт Principal в контекст запроса (эмуляция пройденного Authenticate).
+// withUser кладет Principal в контекст запроса (эмуляция пройденного Authenticate).
 func withUser(req *http.Request, p *middleware.Principal) *http.Request {
 	return req.WithContext(middleware.ContextWithUser(req.Context(), p))
 }
@@ -59,13 +59,13 @@ func withChiID(req *http.Request, id string) *http.Request {
 //   - page:  целое >= 1 (если параметр не передан — валиден, значение по умолчанию 1);
 //   - limit: целое в диапазоне [1, 100] (не передан — валиден, по умолчанию 10).
 //
-// Тест опирается на контракт, а не на реализацию хендлера, поэтому переживёт
+// Тест опирается на контракт, а не на реализацию хендлера, поэтому переживет
 // любые внутренние рефакторинги List.
 func expectedInvalidPaginationParams(t *testing.T, rawQuery string) []string {
 	t.Helper()
 	q, err := url.ParseQuery(rawQuery)
 	if err != nil {
-		t.Fatalf("не удалось разобрать query %q: %v", rawQuery, err)
+		t.Fatalf("Не удалось разобрать query %q: %v", rawQuery, err)
 	}
 	var want []string
 	if v := q.Get("page"); v != "" {
@@ -91,18 +91,18 @@ func assertDetailsExact(t *testing.T, rec *httptest.ResponseRecorder, fields ...
 		Details map[string][]string `json:"details"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("не удалось декодировать ответ: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("Не удалось декодировать ответ: %v; body = %s", err, rec.Body.String())
 	}
 	wantSet := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
 		wantSet[f] = struct{}{}
 		if _, ok := body.Details[f]; !ok {
-			t.Errorf("в details отсутствует ключ %q; body=%s", f, rec.Body.String())
+			t.Errorf("В details отсутствует ключ %q; body = %s", f, rec.Body.String())
 		}
 	}
 	for fact := range body.Details {
 		if _, ok := wantSet[fact]; !ok {
-			t.Errorf("лишний ключ %q в details; body=%s", fact, rec.Body.String())
+			t.Errorf("Лишний ключ %q в details; body = %s", fact, rec.Body.String())
 		}
 	}
 }
@@ -113,7 +113,7 @@ func assertDetailsExact(t *testing.T, rec *httptest.ResponseRecorder, fields ...
 
 // TestMe_Success и TestMe_Unauthenticated: профиль доступен только аутентифицированным.
 func TestMe(t *testing.T) {
-	t.Run("успех: пользователь видит собственный профиль без хеша пароля", func(t *testing.T) {
+	t.Run("Успех: пользователь видит собственный профиль без хеша пароля", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -122,42 +122,42 @@ func TestMe(t *testing.T) {
 		h.Me(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		var got models.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
 		if got.ID != u.ID || got.Email != u.Email {
-			t.Errorf("получен чужой профиль: %+v", got)
+			t.Errorf("Получен чужой профиль: %+v", got)
 		}
 		if strings.Contains(rec.Body.String(), "password") {
-			t.Error("хеш пароля не должен присутствовать в ответе")
+			t.Error("Хеш пароля не должен присутствовать в ответе")
 		}
 	})
 
-	t.Run("без Principal в контексте -> 401", func(t *testing.T) {
+	t.Run("Без Principal в контексте -> 401", func(t *testing.T) {
 		h, _ := newUserHandler()
 		rec := httptest.NewRecorder()
 		h.Me(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
-	t.Run("пользователь удалён из БД, но токен живой -> 404", func(t *testing.T) {
+	t.Run("Пользователь удален из БД, но токен живой -> 404", func(t *testing.T) {
 		h, _ := newUserHandler()
 		ghost := &middleware.Principal{ID: uuid.New(), Email: "ghost@example.com", Role: models.RoleUser}
 		req := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil), ghost)
 		rec := httptest.NewRecorder()
 		h.Me(rec, req)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("статус = %d, хочу 404", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 404", rec.Code)
 		}
 	})
 }
 
 // TestPutMe — полная замена собственного профиля (PUT /users/me).
 func TestPutMe(t *testing.T) {
-	t.Run("успешная замена email, имени и фамилии", func(t *testing.T) {
+	t.Run("Успешная замена email, имени и фамилии", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
 
@@ -167,15 +167,15 @@ func TestPutMe(t *testing.T) {
 		h.PutMe(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.Email != "new@example.com" || got.FirstName != "New" || got.LastName != "Name" {
-			t.Errorf("профиль не обновлён: %+v", got)
+			t.Errorf("Профиль не обновлен: %+v", got)
 		}
 	})
 
-	t.Run("валидация: битый email и пустые имена -> 400 с details", func(t *testing.T) {
+	t.Run("Валидация: битый email и пустые имена -> 400 с details", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -192,13 +192,13 @@ func TestPutMe(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.PutMe(rec, req)
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("статус = %d, хочу 400; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 400; body = %s", rec.Code, rec.Body.String())
 			}
 			assertDetail(t, rec, c.field)
 		}
 	})
 
-	t.Run("конфликт: чужой занятый email -> 409", func(t *testing.T) {
+	t.Run("Конфликт: чужой занятый email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
@@ -208,13 +208,13 @@ func TestPutMe(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.PutMe(rec, req)
 		if rec.Code != http.StatusConflict {
-			t.Fatalf("статус = %d, хочу 409", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 409", rec.Code)
 		}
 	})
 
-	// АТАКА (mass assignment / privilege escalation): пользователь пытается
+	// Атака (mass assignment / privilege escalation): пользователь пытается
 	// повысить себе роль или деактивировать себя через /users/me.
-	t.Run("АТАКА: поля role и status отклоняются на уровне декодирования", func(t *testing.T) {
+	t.Run("Атака: поля role и status отклоняются на уровне декодирования", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -227,11 +227,11 @@ func TestPutMe(t *testing.T) {
 			h.PutMe(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("статус = %d, хочу 400 для поля %s", rec.Code, extra)
+				t.Fatalf("Статус = %d, ожидается: 400 для поля %s", rec.Code, extra)
 			}
 			got, _ := store.GetByID(nilCtx(), u.ID)
 			if got.Role != models.RoleUser || got.Status != models.StatusActive {
-				t.Errorf("роль/статус изменились: %+v", got)
+				t.Errorf("Роль/статус изменились: %+v", got)
 			}
 		}
 	})
@@ -239,7 +239,7 @@ func TestPutMe(t *testing.T) {
 
 // TestPatchMe — частичное обновление собственного профиля (PATCH /users/me).
 func TestPatchMe(t *testing.T) {
-	t.Run("успех: обновление только имени", func(t *testing.T) {
+	t.Run("Успех: обновление только имени", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -248,15 +248,15 @@ func TestPatchMe(t *testing.T) {
 		h.PatchMe(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.FirstName != "Only" || got.Email != u.Email {
-			t.Errorf("частичное обновление затронуло лишние поля: %+v", got)
+			t.Errorf("Частичное обновление затронуло лишние поля: %+v", got)
 		}
 	})
 
-	t.Run("пустое тело -> 400 с подсказкой", func(t *testing.T) {
+	t.Run("Пустое тело -> 400 с подсказкой", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -264,12 +264,12 @@ func TestPatchMe(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.PatchMe(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		assertMessage(t, rec, messages.EmptyUpdateData)
 	})
 
-	t.Run("невалидный email в patch -> 400", func(t *testing.T) {
+	t.Run("Невалидный email в PATCH -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 
@@ -277,12 +277,12 @@ func TestPatchMe(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.PatchMe(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		assertDetail(t, rec, "email")
 	})
 
-	t.Run("конфликт email -> 409", func(t *testing.T) {
+	t.Run("Конфликт email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
 		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
@@ -291,7 +291,7 @@ func TestPatchMe(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.PatchMe(rec, req)
 		if rec.Code != http.StatusConflict {
-			t.Fatalf("статус = %d, хочу 409", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 409", rec.Code)
 		}
 	})
 }
@@ -313,7 +313,7 @@ func TestList(t *testing.T) {
 		}
 	}
 
-	t.Run("успех: значения по умолчанию page=1 limit=10", func(t *testing.T) {
+	t.Run("Успех: значения по умолчанию page = 1, limit = 10", func(t *testing.T) {
 		h, store := newUserHandler()
 		seedList(store, 12)
 
@@ -321,16 +321,16 @@ func TestList(t *testing.T) {
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users", nil))
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 		}
 		var res repository.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if len(res.Items) != 10 || res.Total != 12 || res.Page != 1 {
-			t.Errorf("пагинация по умолчанию: items=%d total=%d page=%d", len(res.Items), res.Total, res.Page)
+			t.Errorf("Пагинация по умолчанию: items = %d, total = %d, page = %d", len(res.Items), res.Total, res.Page)
 		}
 	})
 
-	t.Run("пагинация: вторая и третья страницы", func(t *testing.T) {
+	t.Run("Пагинация: вторая и третья страницы", func(t *testing.T) {
 		h, store := newUserHandler()
 		seedList(store, 25)
 
@@ -339,18 +339,18 @@ func TestList(t *testing.T) {
 		var res repository.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if len(res.Items) != 10 || res.TotalPages != 3 {
-			t.Errorf("страница 2: items=%d totalPages=%d", len(res.Items), res.TotalPages)
+			t.Errorf("Страница 2: items = %d, totalPages = %d", len(res.Items), res.TotalPages)
 		}
 
 		rec = httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?page=3&limit=10", nil))
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if len(res.Items) != 5 {
-			t.Errorf("страница 3: items=%d, хочу 5", len(res.Items))
+			t.Errorf("Страница 3: items = %d, ожидается: 5", len(res.Items))
 		}
 	})
 
-	t.Run("невалидные параметры пагинации -> 400 с details только по невалидным полям", func(t *testing.T) {
+	t.Run("Невалидные параметры пагинации -> 400 с details только по невалидным полям", func(t *testing.T) {
 		h, _ := newUserHandler()
 
 		// Набор query-вариантов: невалиден только page, только limit и оба сразу.
@@ -373,13 +373,13 @@ func TestList(t *testing.T) {
 				h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users"+q, nil))
 
 				if rec.Code != http.StatusBadRequest {
-					t.Fatalf("query %q: статус = %d, хочу 400; body=%s", q, rec.Code, rec.Body.String())
+					t.Fatalf("Query %q: статус = %d, ожидается: 400; body = %s", q, rec.Code, rec.Body.String())
 				}
 
 				// Ожидаемый набор ключей выводится динамически из самой query-строки.
 				want := expectedInvalidPaginationParams(t, strings.TrimPrefix(q, "?"))
 				if len(want) == 0 {
-					t.Fatalf("query %q по построению должна быть невалидной", q)
+					t.Fatalf("Query %q по построению должна быть невалидной", q)
 				}
 				// Проверяем точное совпадение множества ключей: ни пропусков, ни лишних.
 				assertDetailsExact(t, rec, want...)
@@ -387,21 +387,21 @@ func TestList(t *testing.T) {
 		}
 	})
 
-	t.Run("валидные параметры пагинации -> 200 и пустой details", func(t *testing.T) {
+	t.Run("Валидные параметры пагинации -> 200 и пустой details", func(t *testing.T) {
 		h, _ := newUserHandler()
 		for _, q := range []string{"", "?page=1", "?limit=100", "?page=2&limit=1", "?page=1&limit=100"} {
 			rec := httptest.NewRecorder()
 			h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users"+q, nil))
 
 			if rec.Code != http.StatusOK {
-				t.Fatalf("query %q: статус = %d, хочу 200; body=%s", q, rec.Code, rec.Body.String())
+				t.Fatalf("Query %q: статус = %d, ожидается: 200; body = %s", q, rec.Code, rec.Body.String())
 			}
 			// При успехе details не должен содержать ни одного ключа.
 			assertDetailsExact(t, rec)
 		}
 	})
 
-	t.Run("фильтр role: валидный и невалидный", func(t *testing.T) {
+	t.Run("Фильтр role: валидный и невалидный", func(t *testing.T) {
 		h, store := newUserHandler()
 		seedList(store, 10)
 
@@ -411,22 +411,22 @@ func TestList(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		for _, it := range res.Items {
 			if it.Role != models.RoleAdmin {
-				t.Errorf("фильтр role сломан: %+v", it)
+				t.Errorf("Фильтр role сломан: %+v", it)
 			}
 		}
 		if res.Total == 0 {
-			t.Error("фильтр role=admin не нашёл ни одного администратора")
+			t.Error("Фильтр role = admin не нашел ни одного администратора")
 		}
 
 		rec = httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?role=superadmin", nil))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400 для role=superadmin", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400 для role = superadmin", rec.Code)
 		}
 		assertDetail(t, rec, "role")
 	})
 
-	t.Run("фильтр status: валидный и невалидный", func(t *testing.T) {
+	t.Run("Фильтр status: валидный и невалидный", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "active@example.com", "StrongPass123", models.RoleUser)
 		blocked := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
@@ -437,19 +437,19 @@ func TestList(t *testing.T) {
 		var res repository.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if res.Total != 1 || res.Items[0].Email != "blocked@example.com" {
-			t.Errorf("фильтр status=inactive: %+v", res.Items)
+			t.Errorf("Фильтр status = inactive: %+v", res.Items)
 		}
 
 		rec = httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?status=banned", nil))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400 для status=banned", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400 для status = banned", rec.Code)
 		}
 		assertDetail(t, rec, "status")
 		_ = u
 	})
 
-	t.Run("поиск по подстроке и ограничение длины поиска", func(t *testing.T) {
+	t.Run("Поиск по подстроке и ограничение длины поиска", func(t *testing.T) {
 		h, store := newUserHandler()
 		seedUser(t, store, "findme@example.com", "StrongPass123", models.RoleUser)
 		seedUser(t, store, "other@example.com", "StrongPass123", models.RoleUser)
@@ -459,20 +459,20 @@ func TestList(t *testing.T) {
 		var res repository.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if res.Total != 1 || res.Items[0].Email != "findme@example.com" {
-			t.Errorf("поиск: %+v", res.Items)
+			t.Errorf("Поиск: %+v", res.Items)
 		}
 
 		rec = httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?search="+strings.Repeat("x", 201), nil))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400 для search длиннее 200", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400 для search длиннее 200", rec.Code)
 		}
 	})
 }
 
 // TestCreate — создание пользователей администратором (POST /users).
 func TestCreate(t *testing.T) {
-	t.Run("успех: создание обычного пользователя и администратора", func(t *testing.T) {
+	t.Run("Успех: создание обычного пользователя и администратора", func(t *testing.T) {
 		h, store := newUserHandler()
 
 		rec := httptest.NewRecorder()
@@ -481,12 +481,12 @@ func TestCreate(t *testing.T) {
 			"first_name": "N", "last_name": "U",
 		}))
 		if rec.Code != http.StatusCreated {
-			t.Fatalf("статус = %d, хочу 201; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 		}
 		var u models.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &u)
 		if u.Role != models.RoleUser {
-			t.Errorf("роль по умолчанию = %q, хочу user", u.Role)
+			t.Errorf("Роль по умолчанию = %q, ожидается: user", u.Role)
 		}
 
 		rec = httptest.NewRecorder()
@@ -495,28 +495,28 @@ func TestCreate(t *testing.T) {
 			"first_name": "B", "last_name": "S", "role": "admin",
 		}))
 		if rec.Code != http.StatusCreated {
-			t.Fatalf("статус = %d, хочу 201; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &u)
 		if u.Role != models.RoleAdmin {
-			t.Errorf("явная роль admin не применена: %q", u.Role)
+			t.Errorf("Явная роль admin не применена: %q", u.Role)
 		}
 		_ = store
 	})
 
-	t.Run("валидация обязательных полей -> 400 с полным набором details", func(t *testing.T) {
+	t.Run("Валидация обязательных полей -> 400 с полным набором details", func(t *testing.T) {
 		h, _ := newUserHandler()
 		rec := httptest.NewRecorder()
 		h.Create(rec, postJSON("/api/v1/users", map[string]string{"email": "x@y.z"}))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		for _, f := range []string{"email", "first_name", "last_name", "password"} {
 			assertDetail(t, rec, f)
 		}
 	})
 
-	t.Run("недопустимая роль -> 400", func(t *testing.T) {
+	t.Run("Недопустимая роль -> 400", func(t *testing.T) {
 		h, _ := newUserHandler()
 		rec := httptest.NewRecorder()
 		h.Create(rec, postJSON("/api/v1/users", map[string]string{
@@ -524,12 +524,12 @@ func TestCreate(t *testing.T) {
 			"first_name": "A", "last_name": "B", "role": "root",
 		}))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		assertDetail(t, rec, "role")
 	})
 
-	t.Run("дубликат email -> 409", func(t *testing.T) {
+	t.Run("Дубликат email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
 		seedUser(t, store, "dup@example.com", "StrongPass123", models.RoleUser)
 
@@ -539,7 +539,7 @@ func TestCreate(t *testing.T) {
 			"first_name": "A", "last_name": "B",
 		}))
 		if rec.Code != http.StatusConflict {
-			t.Fatalf("статус = %d, хочу 409", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 409", rec.Code)
 		}
 		assertMessage(t, rec, messages.EmailAlreadyUsed)
 	})
@@ -547,7 +547,7 @@ func TestCreate(t *testing.T) {
 
 // TestGetByID — чтение пользователя по идентификатору.
 func TestGetByID(t *testing.T) {
-	t.Run("успех", func(t *testing.T) {
+	t.Run("Успех", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "one@example.com", "StrongPass123", models.RoleUser)
 
@@ -555,29 +555,29 @@ func TestGetByID(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.GetByID(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 		}
 	})
 
-	t.Run("невалидный UUID -> 400", func(t *testing.T) {
+	t.Run("Невалидный UUID -> 400", func(t *testing.T) {
 		h, _ := newUserHandler()
 		req := withChiID(httptest.NewRequest(http.MethodGet, "/api/v1/users/not-a-uuid", nil), "not-a-uuid")
 		rec := httptest.NewRecorder()
 		h.GetByID(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		assertMessage(t, rec, messages.InvalidUserID)
 	})
 
-	t.Run("пользователь не найден -> 404", func(t *testing.T) {
+	t.Run("Пользователь не найден -> 404", func(t *testing.T) {
 		h, _ := newUserHandler()
 		id := uuid.New().String()
 		req := withChiID(httptest.NewRequest(http.MethodGet, "/api/v1/users/"+id, nil), id)
 		rec := httptest.NewRecorder()
 		h.GetByID(rec, req)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("статус = %d, хочу 404", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 404", rec.Code)
 		}
 		assertMessage(t, rec, messages.UserNotFound)
 	})
@@ -592,7 +592,7 @@ func TestPut(t *testing.T) {
 		}
 	}
 
-	t.Run("успешная полная замена, включая статус", func(t *testing.T) {
+	t.Run("Успешная полная замена, включая статус", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
 
@@ -603,15 +603,15 @@ func TestPut(t *testing.T) {
 		h.Put(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.Email != "put@example.com" || got.Status != models.StatusInactive {
-			t.Errorf("замена не применена: %+v", got)
+			t.Errorf("Замена не применена: %+v", got)
 		}
 	})
 
-	t.Run("status обязателен: отсутствие -> 400", func(t *testing.T) {
+	t.Run("Status обязателен: отсутствие -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
 		body := fullBody()
@@ -621,12 +621,12 @@ func TestPut(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Put(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		assertDetail(t, rec, "status")
 	})
 
-	t.Run("набор ошибок валидации -> 400", func(t *testing.T) {
+	t.Run("Набор ошибок валидации -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
 
@@ -647,13 +647,13 @@ func TestPut(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.Put(rec, req)
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("поле %s: статус = %d, хочу 400", c.field, rec.Code)
+				t.Fatalf("Поле %s: статус = %d, ожидается: 400", c.field, rec.Code)
 			}
 			assertDetail(t, rec, c.field)
 		}
 	})
 
-	t.Run("АТАКА: поле role в PUT игнорируется (роль через PUT не меняется)", func(t *testing.T) {
+	t.Run("Атака: поле role в PUT игнорируется (роль через PUT не меняется)", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
 
@@ -666,15 +666,15 @@ func TestPut(t *testing.T) {
 		h.Put(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.Role != models.RoleUser {
-			t.Errorf("роль изменилась через PUT: %q", got.Role)
+			t.Errorf("Роль изменилась через PUT: %q", got.Role)
 		}
 	})
 
-	t.Run("несуществующий пользователь -> 404, конфликт email -> 409", func(t *testing.T) {
+	t.Run("Несуществующий пользователь -> 404, конфликт email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "one@example.com", "StrongPass123", models.RoleUser)
 		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
@@ -700,7 +700,7 @@ func TestPut(t *testing.T) {
 
 // TestPatch — частичное обновление администратором (PATCH /users/{id}).
 func TestPatch(t *testing.T) {
-	t.Run("успех: точечная смена статуса", func(t *testing.T) {
+	t.Run("Успех: точечная смена статуса", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
 
@@ -709,15 +709,15 @@ func TestPatch(t *testing.T) {
 		h.Patch(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.Status != models.StatusInactive {
-			t.Errorf("статус не обновлён: %+v", got)
+			t.Errorf("Статус не обновлен: %+v", got)
 		}
 	})
 
-	t.Run("смена пароля отзывает ВСЕ сессии пользователя", func(t *testing.T) {
+	t.Run("Смена пароля отзывает ВСЕ сессии пользователя", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "p@example.com", "OldPass12345", models.RoleUser)
 
@@ -731,24 +731,24 @@ func TestPatch(t *testing.T) {
 		h.Patch(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		// Все сессии погашены (требование версии 1.0.17).
 		store.mu.Lock()
 		for _, tk := range store.tokens {
 			if tk.UserID == u.ID && !tk.Revoked {
-				t.Errorf("сессия не отозвана после смены пароля: %s", tk.TokenHash[:8])
+				t.Errorf("Сессия не отозвана после смены пароля: %s", tk.TokenHash[:8])
 			}
 		}
 		store.mu.Unlock()
 		// Новый пароль действительно работает (хеш пересоздан).
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if err := bcrypt.CompareHashAndPassword([]byte(got.PasswordHash), []byte("BrandNewPass1")); err != nil {
-			t.Errorf("хеш нового пароля некорректен: %v", err)
+			t.Errorf("Хеш нового пароля некорректен: %v", err)
 		}
 	})
 
-	t.Run("валидация: невалидные status и password -> 400", func(t *testing.T) {
+	t.Run("Валидация: невалидные status и password -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
 
@@ -756,7 +756,7 @@ func TestPatch(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Patch(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status: статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Status: статус = %d, ожидается: 400", rec.Code)
 		}
 		assertDetail(t, rec, "status")
 
@@ -764,12 +764,12 @@ func TestPatch(t *testing.T) {
 		rec = httptest.NewRecorder()
 		h.Patch(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("password: статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Password: статус = %d, ожидается: 400", rec.Code)
 		}
 		assertDetail(t, rec, "password")
 	})
 
-	t.Run("АТАКА: смена роли через PATCH отклоняется (unknown field)", func(t *testing.T) {
+	t.Run("Атака: смена роли через PATCH отклоняется (Unknown field)", func(t *testing.T) {
 		h, store := newUserHandler()
 		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
 
@@ -777,29 +777,29 @@ func TestPatch(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Patch(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("статус = %d, хочу 400", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
 		if got.Role != models.RoleUser {
-			t.Errorf("роль изменилась через PATCH: %q", got.Role)
+			t.Errorf("Роль изменилась через PATCH: %q", got.Role)
 		}
 	})
 
-	t.Run("несуществующий пользователь -> 404", func(t *testing.T) {
+	t.Run("Несуществующий пользователь -> 404", func(t *testing.T) {
 		h, _ := newUserHandler()
 		missing := uuid.New().String()
 		req := withChiID(postJSON("/api/v1/users/"+missing, map[string]string{"status": "active"}), missing)
 		rec := httptest.NewRecorder()
 		h.Patch(rec, req)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("статус = %d, хочу 404", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 404", rec.Code)
 		}
 	})
 }
 
 // TestDelete — удаление пользователей администратором (DELETE /users/{id}).
 func TestDelete(t *testing.T) {
-	t.Run("успех: удаление обычного пользователя -> 204", func(t *testing.T) {
+	t.Run("Успех: удаление обычного пользователя -> 204", func(t *testing.T) {
 		h, store := newUserHandler()
 		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
 		victim := seedUser(t, store, "victim@example.com", "StrongPass123", models.RoleUser)
@@ -809,14 +809,14 @@ func TestDelete(t *testing.T) {
 		h.Delete(rec, req)
 
 		if rec.Code != http.StatusNoContent {
-			t.Fatalf("статус = %d, хочу 204; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 204; body = %s", rec.Code, rec.Body.String())
 		}
 		if _, err := store.GetByID(nilCtx(), victim.ID); err == nil {
-			t.Error("пользователь должен быть удалён из хранилища")
+			t.Error("Пользователь должен быть удален из хранилища")
 		}
 	})
 
-	t.Run("АТАКА/защита: администратор не может удалить сам себя -> 403", func(t *testing.T) {
+	t.Run("Атака/защита: администратор не может удалить сам себя -> 403", func(t *testing.T) {
 		h, store := newUserHandler()
 		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
 
@@ -825,12 +825,12 @@ func TestDelete(t *testing.T) {
 		h.Delete(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 		assertMessage(t, rec, messages.AdminCannotDeleteSelf)
 	})
 
-	t.Run("защита: учетную запись администратора удалить нельзя -> 403", func(t *testing.T) {
+	t.Run("Защита: учетную запись администратора удалить нельзя -> 403", func(t *testing.T) {
 		h, store := newUserHandler()
 		admin1 := seedUser(t, store, "admin1@example.com", "StrongPass123", models.RoleAdmin)
 		admin2 := seedUser(t, store, "admin2@example.com", "StrongPass123", models.RoleAdmin)
@@ -840,12 +840,12 @@ func TestDelete(t *testing.T) {
 		h.Delete(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 		assertMessage(t, rec, messages.CannotDeleteAdminAccount)
 	})
 
-	t.Run("несуществующий пользователь -> 404, битый UUID -> 400, без Principal -> 401", func(t *testing.T) {
+	t.Run("Несуществующий пользователь -> 404, битый UUID -> 400, без Principal -> 401", func(t *testing.T) {
 		h, store := newUserHandler()
 		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
 
@@ -891,38 +891,38 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 
 	adminChain := middleware.Authenticate(cfg, store)(middleware.RequireAdmin(http.HandlerFunc(h.List)))
 
-	t.Run("обычный пользователь с валидным токеном -> 403", func(t *testing.T) {
+	t.Run("Обычный пользователь с валидным токеном -> 403", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: userPair.AccessToken})
 		rec := httptest.NewRecorder()
 		adminChain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 403; body = %s", rec.Code, rec.Body.String())
 		}
 		assertMessage(t, rec, messages.InsufficientPermissions)
 	})
 
-	t.Run("администратор с валидным токеном -> 200", func(t *testing.T) {
+	t.Run("Администратор с валидным токеном -> 200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: adminPair.AccessToken})
 		rec := httptest.NewRecorder()
 		adminChain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 	})
 
-	t.Run("запрос без токена -> 401", func(t *testing.T) {
+	t.Run("Запрос без токена -> 401", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		adminChain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 }
 
 // TestRBAC_IDOR — атака IDOR: пользователь с валидным токеном обращается к чужой
-// карточке через админский маршрут /users/{id}; доступ к собственному /users/me остаётся.
+// карточке через админский маршрут /users/{id}; доступ к собственному /users/me остается.
 func TestRBAC_IDOR(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
@@ -932,30 +932,30 @@ func TestRBAC_IDOR(t *testing.T) {
 	victim := seedUser(t, store, "victim@example.com", "StrongPass123", models.RoleUser)
 	userPair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
 
-	t.Run("чужая карточка через админский маршрут -> 403", func(t *testing.T) {
+	t.Run("Чужая карточка через админский маршрут -> 403", func(t *testing.T) {
 		chain := middleware.Authenticate(cfg, store)(middleware.RequireAdmin(http.HandlerFunc(h.GetByID)))
 		req := withChiID(httptest.NewRequest(http.MethodGet, "/api/v1/users/"+victim.ID.String(), nil), victim.ID.String())
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: userPair.AccessToken})
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 
-	t.Run("собственный профиль через /users/me -> 200", func(t *testing.T) {
+	t.Run("Собственный профиль через /users/me -> 200", func(t *testing.T) {
 		chain := middleware.Authenticate(cfg, store)(middleware.RequireUserOrAdmin(http.HandlerFunc(h.Me)))
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: userPair.AccessToken})
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		var got models.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
 		if got.ID != user.ID {
-			t.Error("пользователь получил чужой профиль")
+			t.Error("Пользователь получил чужой профиль")
 		}
 	})
 }
@@ -982,7 +982,7 @@ func TestAdminFullFlow(t *testing.T) {
 	rec := httptest.NewRecorder()
 	chain(userH.List).ServeHTTP(rec, withAdmin(httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("list: статус = %d", rec.Code)
+		t.Fatalf("List: статус = %d", rec.Code)
 	}
 
 	// 2. Создание пользователя.
@@ -992,7 +992,7 @@ func TestAdminFullFlow(t *testing.T) {
 		"first_name": "S", "last_name": "T",
 	})))
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("create: статус = %d; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Create: статус = %d; body = %s", rec.Code, rec.Body.String())
 	}
 	var created models.User
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
@@ -1002,18 +1002,18 @@ func TestAdminFullFlow(t *testing.T) {
 	req := withChiID(postJSON("/api/v1/users/"+created.ID.String(), map[string]string{"status": "inactive"}), created.ID.String())
 	chain(userH.Patch).ServeHTTP(rec, withAdmin(req))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("patch: статус = %d; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("PATCH: статус = %d; body = %s", rec.Code, rec.Body.String())
 	}
 	blocked, _ := store.GetByID(nilCtx(), created.ID)
 	if blocked.Status != models.StatusInactive {
-		t.Errorf("статус после блокировки = %q", blocked.Status)
+		t.Errorf("Статус после блокировки = %q", blocked.Status)
 	}
 
 	// 4. Заблокированный пользователь больше не может войти.
 	rec = httptest.NewRecorder()
 	authH.Login(rec, postJSON("/api/v1/login", map[string]string{"email": "staff@example.com", "password": "StrongPass123"}))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("вход заблокированного: статус = %d, хочу 401", rec.Code)
+		t.Fatalf("Вход заблокированного: статус = %d, ожидается: 401", rec.Code)
 	}
 
 	// 5. Удаление пользователя.
@@ -1022,7 +1022,7 @@ func TestAdminFullFlow(t *testing.T) {
 	delReq = withUser(delReq, asPrincipal(admin))
 	userH.Delete(rec, delReq)
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete: статус = %d, хочу 204", rec.Code)
+		t.Fatalf("DELETE: статус = %d, ожидается: 204", rec.Code)
 	}
 	_ = bytes.MinRead // заглушка не нужна; импорт bytes используется postJSON в auth_test.go
 }

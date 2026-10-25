@@ -77,12 +77,12 @@ func TestRequireAllowedOrigin(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 
 			// Проверяем, что следующий handler вызывается только при успешной проверке
 			if nextCalled != (tt.wantStatus == http.StatusNoContent) {
-				t.Fatalf("nextCalled = %v, должно соответствовать статусу %d", nextCalled, tt.wantStatus)
+				t.Fatalf("nextCalled = %v, должно соответствовать статусу: %d", nextCalled, tt.wantStatus)
 			}
 		})
 	}
@@ -149,7 +149,7 @@ func TestRequireAllowedOriginUsesRefererOnlyWhenOriginMissing(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
 	}
@@ -216,7 +216,7 @@ func TestCSRFUsesRefererFallbackWhenOriginMissing(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
 	}
@@ -322,7 +322,7 @@ func TestOriginSecurityAttackScenarios(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusNoContent {
-			t.Errorf("Origin с пробелами должен быть обработан корректно, status=%d", rec.Code)
+			t.Errorf("Origin с пробелами должен быть обработан корректно, status = %d", rec.Code)
 		}
 	})
 

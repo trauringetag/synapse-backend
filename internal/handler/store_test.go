@@ -220,7 +220,7 @@ func (s *mockStore) GetActive(ctx context.Context, tokenHash string) (*models.Re
 	return t, nil
 }
 
-// Rotate воспроизводит транзакционную ротацию: старый токен гасится, создаётся наследник.
+// Rotate воспроизводит транзакционную ротацию: старый токен гасится, создается наследник.
 // Повторное использование ОТЗЫВАННОГО токена -> ErrRefreshTokenReplay (детект replay-атаки).
 func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID uuid.UUID, createSuccessor func(*models.User) (string, time.Time, error)) (*models.User, error) {
 	s.mu.Lock()

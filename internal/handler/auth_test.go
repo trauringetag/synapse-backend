@@ -40,7 +40,7 @@ func testConfig() *config.Config {
 	}
 }
 
-// cookieMap — выборка cookie ответа по имени (перенесён сюда из store_mock_test.go
+// cookieMap — выборка cookie ответа по имени (перенесен сюда из store_mock_test.go
 // вместе с корректным импортом net/http).
 func cookieMap(cs []*http.Cookie) map[string]string {
 	m := make(map[string]string, len(cs))
@@ -57,10 +57,10 @@ func assertDetail(t *testing.T, rec *httptest.ResponseRecorder, field string) {
 		Details map[string][]string `json:"details"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("не удалось декодировать тело ответа: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("Не удалось декодировать тело ответа: %v; body = %s", err, rec.Body.String())
 	}
 	if _, ok := body.Details[field]; !ok {
-		t.Errorf("в details отсутствует поле %q; body=%s", field, rec.Body.String())
+		t.Errorf("В details отсутствует поле %q; body = %s", field, rec.Body.String())
 	}
 }
 
@@ -71,10 +71,10 @@ func assertMessage(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("не удалось декодировать тело ответа: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("Не удалось декодировать тело ответа: %v; body = %s", err, rec.Body.String())
 	}
 	if body.Message != want {
-		t.Errorf("message = %q, хочу %q", body.Message, want)
+		t.Errorf("Message = %q, ожидается: %q", body.Message, want)
 	}
 }
 
@@ -112,24 +112,24 @@ func TestRegister_Success(t *testing.T) {
 	h.Register(rec, postJSON("/api/v1/register", body))
 
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("статус = %d, хочу 201; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
 	var u models.User
 	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
 		t.Fatal(err)
 	}
 	if u.Email != "newuser@example.com" {
-		t.Errorf("email не нормализован: %q", u.Email)
+		t.Errorf("Email не нормализован: %q", u.Email)
 	}
 	if u.Role != models.RoleUser {
-		t.Errorf("роль по умолчанию = %q, хочу %q", u.Role, models.RoleUser)
+		t.Errorf("Роль по умолчанию = %q, ожидается: %q", u.Role, models.RoleUser)
 	}
 	if u.Status != models.StatusActive {
-		t.Errorf("статус нового пользователя = %q, хочу %q", u.Status, models.StatusActive)
+		t.Errorf("Статус нового пользователя = %q, ожидается: %q", u.Status, models.StatusActive)
 	}
 	// Утечка данных: хеш пароля не должен попадать в JSON (json:"-").
 	if strings.Contains(rec.Body.String(), "password") {
-		t.Errorf("в ответе регистрации присутствует поле password: %s", rec.Body.String())
+		t.Errorf("В ответе регистрации присутствует поле password: %s", rec.Body.String())
 	}
 }
 
@@ -141,22 +141,22 @@ func TestRegister_ValidationErrors(t *testing.T) {
 		rawBody    string
 		wantDetail string
 	}{
-		{name: "email без символа @", mutate: func(b map[string]string) { b["email"] = "not-an-email" }, wantDetail: "email"},
-		{name: "пустой email", mutate: func(b map[string]string) { b["email"] = "" }, wantDetail: "email"},
-		{name: "email длиннее 255 символов", mutate: func(b map[string]string) { b["email"] = strings.Repeat("a", 250) + "@x.com" }, wantDetail: "email"},
-		{name: "пароль короче 8 символов", mutate: func(b map[string]string) { b["password"] = "Sh0rt" }, wantDetail: "password"},
-		{name: "пароль длиннее 72 символов (лимит bcrypt)", mutate: func(b map[string]string) { b["password"] = strings.Repeat("a", 73) }, wantDetail: "password"},
-		{name: "пустое имя", mutate: func(b map[string]string) { b["first_name"] = "" }, wantDetail: "first_name"},
-		{name: "пустая фамилия", mutate: func(b map[string]string) { b["last_name"] = "" }, wantDetail: "last_name"},
-		{name: "имя длиннее 255 символов", mutate: func(b map[string]string) { b["first_name"] = strings.Repeat("b", 256) }, wantDetail: "first_name"},
-		{name: "пустое JSON-тело {}", mutate: func(b map[string]string) {
+		{name: "Email без символа @", mutate: func(b map[string]string) { b["email"] = "not-an-email" }, wantDetail: "email"},
+		{name: "Пустой email", mutate: func(b map[string]string) { b["email"] = "" }, wantDetail: "email"},
+		{name: "Email длиннее 255 символов", mutate: func(b map[string]string) { b["email"] = strings.Repeat("a", 250) + "@x.com" }, wantDetail: "email"},
+		{name: "Пароль короче 8 символов", mutate: func(b map[string]string) { b["password"] = "Sh0rt" }, wantDetail: "password"},
+		{name: "Пароль длиннее 72 символов (лимит bcrypt)", mutate: func(b map[string]string) { b["password"] = strings.Repeat("a", 73) }, wantDetail: "password"},
+		{name: "Пустое имя", mutate: func(b map[string]string) { b["first_name"] = "" }, wantDetail: "first_name"},
+		{name: "Пустая фамилия", mutate: func(b map[string]string) { b["last_name"] = "" }, wantDetail: "last_name"},
+		{name: "Имя длиннее 255 символов", mutate: func(b map[string]string) { b["first_name"] = strings.Repeat("b", 256) }, wantDetail: "first_name"},
+		{name: "Пустое JSON-тело {}", mutate: func(b map[string]string) {
 			for k := range b {
 				delete(b, k)
 			}
 		}, wantDetail: "email"},
-		{name: "битый JSON", rawBody: `{"email": `},
-		{name: "два JSON-документа в теле", rawBody: `{"email":"a@b.c"}{"email":"d@e.f"}`},
-		{name: "пустое тело запроса", rawBody: ""},
+		{name: "Битый JSON", rawBody: `{"email": `},
+		{name: "Два JSON-документа в теле", rawBody: `{"email":"a@b.c"}{"email":"d@e.f"}`},
+		{name: "Пустое тело запроса", rawBody: ""},
 	}
 
 	for _, tt := range tests {
@@ -177,7 +177,7 @@ func TestRegister_ValidationErrors(t *testing.T) {
 			h.Register(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("статус = %d, хочу 400; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 400; body = %s", rec.Code, rec.Body.String())
 			}
 			if tt.wantDetail != "" {
 				assertDetail(t, rec, tt.wantDetail)
@@ -193,9 +193,9 @@ func TestRegister_MassAssignmentBlocked(t *testing.T) {
 		name  string
 		extra string
 	}{
-		{name: "попытка задать role=admin при регистрации", extra: `"role":"admin"`},
-		{name: "попытка задать status", extra: `"status":"inactive"`},
-		{name: "неизвестное поле", extra: `"is_super":true`},
+		{name: "Попытка задать role=admin при регистрации", extra: `"role":"admin"`},
+		{name: "Попытка задать status", extra: `"status":"inactive"`},
+		{name: "Неизвестное поле", extra: `"is_super":true`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,7 +208,7 @@ func TestRegister_MassAssignmentBlocked(t *testing.T) {
 			h.Register(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("статус = %d, хочу 400 (поле отклонено); body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 400 (поле отклонено); body = %s", rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -222,13 +222,13 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Register(rec, postJSON("/api/v1/register", validRegBody()))
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("первая регистрация: статус = %d, хочу 201", rec.Code)
+		t.Fatalf("Первая регистрация: статус = %d, ожидается: 201", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
 	h.Register(rec, postJSON("/api/v1/register", validRegBody()))
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("повторная регистрация: статус = %d, хочу 409; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Повторная регистрация: статус = %d, ожидается: 409; body = %s", rec.Code, rec.Body.String())
 	}
 	assertMessage(t, rec, messages.EmailAlreadyUsed)
 }
@@ -250,26 +250,26 @@ func TestRegisterAdmin_Success(t *testing.T) {
 	h.RegisterAdmin(rec, req)
 
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("статус = %d, хочу 201; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
 	var u models.User
 	_ = json.Unmarshal(rec.Body.Bytes(), &u)
 	if u.Role != models.RoleAdmin {
-		t.Errorf("роль = %q, хочу %q", u.Role, models.RoleAdmin)
+		t.Errorf("Роль = %q, ожидается: %q", u.Role, models.RoleAdmin)
 	}
 }
 
 // TestRegisterAdmin_Forbidden — атака: регистрация админа без токена, с неверным
-// токеном и с токеном, искажённым пробелами (constant-time compare не прощает расхождений).
+// токеном и с токеном, искаженным пробелами (constant-time compare не прощает расхождений).
 func TestRegisterAdmin_Forbidden(t *testing.T) {
 	tests := []struct {
 		name  string
 		token string
 	}{
-		{name: "токен не передан", token: ""},
-		{name: "неверный токен", token: "wrong-token"},
-		{name: "токен с пробелом (искажение)", token: "secret-admin -register-token"},
-		{name: "токен в другом регистре", token: "SECRET-ADMIN-REGISTER-TOKEN"},
+		{name: "Токен не передан", token: ""},
+		{name: "Неверный токен", token: "wrong-token"},
+		{name: "Токен с пробелом (искажение)", token: "secret-admin -register-token"},
+		{name: "Токен в другом регистре", token: "SECRET-ADMIN-REGISTER-TOKEN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -286,19 +286,19 @@ func TestRegisterAdmin_Forbidden(t *testing.T) {
 			h.RegisterAdmin(rec, req)
 
 			if rec.Code != http.StatusForbidden {
-				t.Fatalf("статус = %d, хочу 403; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 403; body = %s", rec.Code, rec.Body.String())
 			}
 			assertMessage(t, rec, messages.InvalidAdminToken)
 			// Пользователь не должен создаться в хранилище.
 			if _, err := store.GetByEmail(req.Context(), "user@example.com"); err == nil {
-				t.Error("пользователь не должен создаваться при невалидном admin-токене")
+				t.Error("Пользователь не должен создаваться при невалидном admin-токене")
 			}
 		})
 	}
 }
 
 // TestRegisterAdmin_ValidationRunsFirst — валидация полей выполняется ДО проверки
-// admin-токена: битое тело даёт 400 даже без токена (не раскрываем порядок проверок).
+// admin-токена: битое тело дает 400 даже без токена (не раскрываем порядок проверок).
 func TestRegisterAdmin_ValidationRunsFirst(t *testing.T) {
 	store := newMockStore()
 	h := NewAuthHandler(testConfig(), store, store)
@@ -310,7 +310,7 @@ func TestRegisterAdmin_ValidationRunsFirst(t *testing.T) {
 	h.RegisterAdmin(rec, postJSON("/api/v1/register-admin", body)) // без X-Admin-Token
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("статус = %d, хочу 400 (валидация раньше проверки токена); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Статус = %d, ожидается: 400 (валидация раньше проверки токена); body = %s", rec.Code, rec.Body.String())
 	}
 	assertDetail(t, rec, "password")
 }
@@ -319,7 +319,7 @@ func TestRegisterAdmin_ValidationRunsFirst(t *testing.T) {
 // ВХОД (LOGIN)
 // ---------------------------------------------------------------------------
 
-// seedUser создаёт пользователя с хешем bcrypt.MinCost (быстро) для большинства тестов.
+// seedUser создает пользователя с хешем bcrypt.MinCost (быстро) для большинства тестов.
 func seedUser(t *testing.T, store *mockStore, email, password, role string) *models.User {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
@@ -348,7 +348,7 @@ func TestLogin_Success(t *testing.T) {
 	}))
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 	assertMessage(t, rec, messages.AuthorizationSuccessful)
 
@@ -356,47 +356,47 @@ func TestLogin_Success(t *testing.T) {
 	cm := cookieMap(cookies)
 	access, refresh := cm[auth.AccessCookie], cm[auth.RefreshCookie]
 	if access == "" || refresh == "" {
-		t.Fatalf("не установлены cookie токенов: %v", cm)
+		t.Fatalf("Не установлены Cookie токенов: %v", cm)
 	}
 
 	// Безопасные атрибуты cookie токенов.
 	for _, c := range cookies {
 		if c.Name == auth.AccessCookie || c.Name == auth.RefreshCookie {
 			if !c.HttpOnly {
-				t.Errorf("cookie %s должна быть HttpOnly", c.Name)
+				t.Errorf("Cookie %s должна быть HttpOnly", c.Name)
 			}
 			if c.Path != "/api/v1/" {
-				t.Errorf("cookie %s: path = %q, хочу /api/v1/", c.Name, c.Path)
+				t.Errorf("Cookie %s: path = %q, ожидается: /api/v1/", c.Name, c.Path)
 			}
 			if c.SameSite != http.SameSiteLaxMode {
-				t.Errorf("cookie %s: SameSite = %v, хочу Lax", c.Name, c.SameSite)
+				t.Errorf("Cookie %s: SameSite = %v, ожидается: Lax", c.Name, c.SameSite)
 			}
 		}
 	}
 
 	// Токены валидны и имеют правильное назначение.
 	if _, err := auth.Parse(cfg, access, "access"); err != nil {
-		t.Errorf("access-токен не разбирается: %v", err)
+		t.Errorf("Access-токен не разбирается: %v", err)
 	}
 	if _, err := auth.Parse(cfg, refresh, "refresh"); err != nil {
-		t.Errorf("refresh-токен не разбирается: %v", err)
+		t.Errorf("Refresh-токен не разбирается: %v", err)
 	}
 	// Атака: access-токен не должен приниматься как refresh и наоборот.
 	if _, err := auth.Parse(cfg, access, "refresh"); err == nil {
-		t.Error("access-токен не должен приниматься как refresh")
+		t.Error("Access-токен не должен приниматься как refresh")
 	}
 	if _, err := auth.Parse(cfg, refresh, "access"); err == nil {
-		t.Error("refresh-токен не должен приниматься как access")
+		t.Error("Refresh-токен не должен приниматься как access")
 	}
 
-	// Refresh-токен сохранён в хранилище (по хешу).
+	// Refresh-токен сохранен в хранилище (по хешу).
 	if _, err := store.GetActive(nilCtx(), auth.HashToken(refresh)); err != nil {
-		t.Errorf("refresh-токен не сохранён в хранилище: %v", err)
+		t.Errorf("Refresh-токен не сохранен в хранилище: %v", err)
 	}
 
 	// Утечка данных: хеш пароля не попадает в ответ.
 	if strings.Contains(rec.Body.String(), "password_hash") || strings.Contains(rec.Body.String(), "$2a$") {
-		t.Errorf("в ответе login присутствует хеш пароля: %s", rec.Body.String())
+		t.Errorf("В ответе login присутствует хеш пароля: %s", rec.Body.String())
 	}
 }
 
@@ -415,10 +415,10 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 		email    string
 		password string
 	}{
-		{name: "неверный пароль", email: "user@example.com", password: "WrongPass123"},
-		{name: "неизвестный email", email: "ghost@example.com", password: "StrongPass123"},
-		{name: "заблокированный пользователь (status=inactive)", email: "blocked@example.com", password: "StrongPass123"},
-		{name: "пустой пароль", email: "user@example.com", password: ""},
+		{name: "Неверный пароль", email: "user@example.com", password: "WrongPass123"},
+		{name: "Неизвестный email", email: "ghost@example.com", password: "StrongPass123"},
+		{name: "Заблокированный пользователь (status=inactive)", email: "blocked@example.com", password: "StrongPass123"},
+		{name: "Пустой пароль", email: "user@example.com", password: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,13 +426,13 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 			h.Login(rec, postJSON("/api/v1/login", map[string]string{"email": tt.email, "password": tt.password}))
 
 			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("статус = %d, хочу 401; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 401; body = %s", rec.Code, rec.Body.String())
 			}
 			assertMessage(t, rec, messages.InvalidCredentials)
 			// Токены не выдаются.
 			cm := cookieMap(rec.Result().Cookies())
 			if cm[auth.AccessCookie] != "" || cm[auth.RefreshCookie] != "" {
-				t.Error("при ошибочном входе cookie токенов устанавливаться не должны")
+				t.Error("При ошибочном входе Cookie токенов устанавливаться не должны")
 			}
 		})
 	}
@@ -448,10 +448,10 @@ func TestLogin_BodyLimits(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "email длиннее 255", body: `{"email":"` + strings.Repeat("a", 250) + `@x.com","password":"StrongPass123"}`},
-		{name: "пароль длиннее 72", body: `{"email":"u@e.com","password":"` + strings.Repeat("a", 73) + `"}`},
-		{name: "битый JSON", body: `{"email":`},
-		{name: "неизвестное поле", body: `{"email":"u@e.com","password":"StrongPass123","admin":true}`},
+		{name: "Email длиннее 255", body: `{"email":"` + strings.Repeat("a", 250) + `@x.com","password":"StrongPass123"}`},
+		{name: "Пароль длиннее 72", body: `{"email":"u@e.com","password":"` + strings.Repeat("a", 73) + `"}`},
+		{name: "Битый JSON", body: `{"email":`},
+		{name: "Неизвестное поле", body: `{"email":"u@e.com","password":"StrongPass123","admin":true}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -460,7 +460,7 @@ func TestLogin_BodyLimits(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.Login(rec, req)
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("статус = %d, хочу 400; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: 400; body = %s", rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -475,7 +475,7 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 	store := newMockStore()
 	h := NewAuthHandler(cfg, store, store)
 
-	// Создаём пользователя с реальным bcrypt-хешем боевой стоимости.
+	// Создаем пользователя с реальным bcrypt-хешем боевой стоимости.
 	realHash, err := bcrypt.GenerateFromPassword([]byte("CorrectPass123"), bcrypt.DefaultCost)
 	if err != nil {
 		t.Fatal(err)
@@ -498,7 +498,7 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 			}))
 			total += time.Since(start)
 			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("итерация %d: статус = %d, хочу 401 для %s", i, rec.Code, email)
+				t.Fatalf("Итерация %d: статус = %d, ожидается: 401 для %s", i, rec.Code, email)
 			}
 		}
 		return total / iterations
@@ -506,30 +506,30 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 
 	// Проверяем, что фейковый хеш валидный (иначе bcrypt не будет работать).
 	if len(dummyHash) < 50 || !strings.HasPrefix(string(dummyHash), "$2a$") {
-		t.Fatalf("dummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(dummyHash))
+		t.Fatalf("DummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(dummyHash))
 	}
 
 	// Измеряем среднее время для обеих веток.
 	dExists := measure("exists@example.com")
 	dMissing := measure("no-such-user@example.com")
 
-	t.Logf("Среднее время ответа: exists=%v, missing=%v", dExists, dMissing)
+	t.Logf("Среднее время ответа: exists = %v, missing = %v", dExists, dMissing)
 
 	// Обе ветки обязаны пройти bcrypt (иначе сравнение было бы мгновенным).
 	// Порог 10ms выбран с запасом: реальный bcrypt с DefaultCost занимает 20-100ms.
 	const minBcryptDuration = 10 * time.Millisecond
 	if dExists < minBcryptDuration {
-		t.Errorf("существующий пользователь: bcrypt не выполнен (время=%v < %v)", dExists, minBcryptDuration)
+		t.Errorf("Существующий пользователь: bcrypt не выполнен (время = %v < %v)", dExists, minBcryptDuration)
 	}
 	if dMissing < minBcryptDuration {
-		t.Errorf("несуществующий пользователь: bcrypt не выполнен (время=%v < %v)", dMissing, minBcryptDuration)
+		t.Errorf("Несуществующий пользователь: bcrypt не выполнен (время = %v < %v)", dMissing, minBcryptDuration)
 	}
 
 	// Проверяем, что времена сопоставимы (расхождение не более чем в 3 раза).
 	// Это мягкая проверка: в CI время может варьироваться из-за нагрузки.
 	ratio := float64(dExists) / float64(dMissing)
 	if ratio > 3.0 || ratio < 1.0/3.0 {
-		t.Errorf("расхождение времён слишком велико: exists=%v, missing=%v, ratio=%.2f (должно быть 0.33..3.0)",
+		t.Errorf("Расхождение времен слишком велико: exists = %v, missing = %v, ratio = %.2f (должно быть 0.33..3.0)",
 			dExists, dMissing, ratio)
 	}
 
@@ -541,7 +541,7 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 	h.Login(rec2, postJSON("/api/v1/login", map[string]string{"email": "ghost@example.com", "password": "WrongPass123"}))
 
 	if rec1.Body.String() != rec2.Body.String() {
-		t.Errorf("ответы различаются (раскрытие существования пользователя):\nexists: %s\nmissing: %s",
+		t.Errorf("Ответы различаются (раскрытие существования пользователя):\nexists: %s\nmissing: %s",
 			rec1.Body.String(), rec2.Body.String())
 	}
 }
@@ -556,12 +556,12 @@ func loginCookies(t *testing.T, h *AuthHandler, email, password string) map[stri
 	rec := httptest.NewRecorder()
 	h.Login(rec, postJSON("/api/v1/login", map[string]string{"email": email, "password": password}))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("вход: статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Вход: статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 	return cookieMap(rec.Result().Cookies())
 }
 
-// refreshRequest создаёт запрос /refresh с указанным refresh-токеном в cookie.
+// refreshRequest создает запрос /refresh с указанным refresh-токеном в cookie.
 func refreshRequest(token string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 	if token != "" {
@@ -585,27 +585,27 @@ func TestRefresh_Rotation(t *testing.T) {
 	h.Refresh(rec, refreshRequest(oldRefresh))
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 	assertMessage(t, rec, messages.TokensRefreshed)
 
 	rotated := cookieMap(rec.Result().Cookies())
 	newAccess, newRefresh := rotated[auth.AccessCookie], rotated[auth.RefreshCookie]
 	if newRefresh == "" || newRefresh == oldRefresh {
-		t.Fatal("ротация не произошла: refresh-токен не сменился")
+		t.Fatal("Ротация не произошла: refresh-токен не сменился")
 	}
 	if newAccess == "" || newAccess == cm[auth.AccessCookie] {
-		t.Error("access-токен также должен быть перевыпущен")
+		t.Error("Access-токен также должен быть перевыпущен")
 	}
 
 	// Старый токен отозван в хранилище (условный UPDATE внутри транзакции).
 	oldRec, err := store.GetActive(nilCtx(), auth.HashToken(oldRefresh))
 	if err == nil && !oldRec.Revoked {
-		t.Error("старый refresh-токен должен быть отозван после ротации")
+		t.Error("Старый refresh-токен должен быть отозван после ротации")
 	}
 	// Новый токен активен.
 	if _, err := store.GetActive(nilCtx(), auth.HashToken(newRefresh)); err != nil {
-		t.Errorf("новый refresh-токен не активен: %v", err)
+		t.Errorf("Новый refresh-токен не активен: %v", err)
 	}
 }
 
@@ -624,7 +624,7 @@ func TestRefresh_ReplayAttack(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Refresh(rec, refreshRequest(oldRefresh))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ротация: статус = %d, хочу 200", rec.Code)
+		t.Fatalf("Ротация: статус = %d, ожидается: 200", rec.Code)
 	}
 	newRefresh := cookieMap(rec.Result().Cookies())[auth.RefreshCookie]
 
@@ -632,21 +632,21 @@ func TestRefresh_ReplayAttack(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.Refresh(rec, refreshRequest(oldRefresh))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("replay: статус = %d, хочу 401; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Replay: статус = %d, ожидается: 401; body = %s", rec.Code, rec.Body.String())
 	}
 	assertMessage(t, rec, messages.InvalidOrExpiredRefreshToken)
 
-	// Все сессии пользователя отозваны: даже свежий легитимный токен мёртв.
+	// Все сессии пользователя отозваны: даже свежий легитимный токен мертв.
 	rec = httptest.NewRecorder()
 	h.Refresh(rec, refreshRequest(newRefresh))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("после replay все сессии должны быть отозваны: статус = %d, хочу 401", rec.Code)
+		t.Fatalf("После replay все сессии должны быть отозваны: статус = %d, ожидается: 401", rec.Code)
 	}
 	store.mu.Lock()
 	for hash, tk := range store.tokens {
 		_ = hash
 		if tk.UserID == u.ID && !tk.Revoked {
-			t.Errorf("токен %s пользователя не отозван после replay-атаки", tk.TokenHash[:8])
+			t.Errorf("Токен %s пользователя не отозван после replay-атаки", tk.TokenHash[:8])
 		}
 	}
 	store.mu.Unlock()
@@ -657,33 +657,33 @@ func TestRefresh_ReplayAttack(t *testing.T) {
 func TestRefresh_RejectCases(t *testing.T) {
 	cfg := testConfig()
 
-	t.Run("отсутствует cookie refresh_token", func(t *testing.T) {
+	t.Run("Отсутствует Cookie refresh_token", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(""))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401", rec.Code)
 		}
 		// Cookie токенов очищаются даже при отказе.
 		for _, c := range rec.Result().Cookies() {
 			if (c.Name == auth.AccessCookie || c.Name == auth.RefreshCookie) && c.MaxAge != -1 {
-				t.Errorf("cookie %s должна быть удалена при отказе", c.Name)
+				t.Errorf("Cookie %s должна быть удалена при отказе", c.Name)
 			}
 		}
 	})
 
-	t.Run("мусорный токен", func(t *testing.T) {
+	t.Run("Мусорный токен", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest("not.a.jwt"))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
-	t.Run("access-токен вместо refresh (проверка audience)", func(t *testing.T) {
+	t.Run("Access-токен вместо refresh (проверка audience)", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
@@ -692,11 +692,11 @@ func TestRefresh_RejectCases(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(cm[auth.AccessCookie])) // подмена назначения
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401", rec.Code)
 		}
 	})
 
-	t.Run("просроченный, но корректно подписанный токен", func(t *testing.T) {
+	t.Run("Просроченный, но корректно подписанный токен", func(t *testing.T) {
 		expCfg := testConfig()
 		expCfg.RefreshTTL = -time.Hour // токен родился уже просроченным
 		store := newMockStore()
@@ -710,11 +710,11 @@ func TestRefresh_RejectCases(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(pair.RefreshToken))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401 для просроченного токена", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401 для просроченного токена", rec.Code)
 		}
 	})
 
-	t.Run("валидный JWT, но неизвестный хранилищу токен", func(t *testing.T) {
+	t.Run("Валидный JWT, но неизвестный хранилищу токен", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
@@ -723,11 +723,11 @@ func TestRefresh_RejectCases(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(pair.RefreshToken))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401 для неизвестного токена", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401 для неизвестного токена", rec.Code)
 		}
 	})
 
-	t.Run("refresh для заблокированного пользователя отзывает его сессии", func(t *testing.T) {
+	t.Run("Refresh для заблокированного пользователя отзывает его сессии", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		u := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
@@ -738,10 +738,10 @@ func TestRefresh_RejectCases(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(pair.RefreshToken))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401 для inactive-пользователя", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 401 для inactive-пользователя", rec.Code)
 		}
 		if _, err := store.GetActive(nilCtx(), auth.HashToken(pair.RefreshToken)); err == nil {
-			t.Error("сессии заблокированного пользователя должны быть отозваны")
+			t.Error("Сессии заблокированного пользователя должны быть отозваны")
 		}
 	})
 }
@@ -755,7 +755,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 func TestLogout(t *testing.T) {
 	cfg := testConfig()
 
-	t.Run("выход с активным refresh-токеном", func(t *testing.T) {
+	t.Run("Выход с активным refresh-токеном", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
@@ -766,26 +766,26 @@ func TestLogout(t *testing.T) {
 		h.Logout(rec, refreshRequest(refresh))
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 		}
 		assertMessage(t, rec, messages.LoggedOut)
 		if _, err := store.GetActive(nilCtx(), auth.HashToken(refresh)); err == nil {
-			t.Error("refresh-токен должен быть отозван при выходе")
+			t.Error("Refresh-токен должен быть отозван при выходе")
 		}
 		for _, c := range rec.Result().Cookies() {
 			if (c.Name == auth.AccessCookie || c.Name == auth.RefreshCookie) && c.MaxAge != -1 {
-				t.Errorf("cookie %s должна быть удалена при выходе", c.Name)
+				t.Errorf("Cookie %s должна быть удалена при выходе", c.Name)
 			}
 		}
 	})
 
-	t.Run("выход без cookie также возвращает 200", func(t *testing.T) {
+	t.Run("Выход без Cookie также возвращает 200", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, store, store)
 		rec := httptest.NewRecorder()
 		h.Logout(rec, httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil))
 		if rec.Code != http.StatusOK {
-			t.Fatalf("статус = %d, хочу 200", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 		}
 	})
 }
@@ -807,25 +807,25 @@ func TestCSRFTokenEndpoint(t *testing.T) {
 	h.CSRFToken(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("статус = %d, хочу 200", rec.Code)
+		t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 	}
 	var body map[string]string
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	token := body["csrf_token"]
 	if token == "" {
-		t.Fatal("тело ответа не содержит csrf_token")
+		t.Fatal("Тело ответа не содержит csrf_token")
 	}
 	cm := cookieMap(rec.Result().Cookies())
 	if cm["csrf_token"] != token {
-		t.Error("значение csrf-токена в cookie и в теле должно совпадать")
+		t.Error("Значение CSRF-токена в cookie и в теле должно совпадать")
 	}
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == "csrf_token" {
 			if c.HttpOnly {
-				t.Error("csrf cookie обязана быть читаемой из JS (HttpOnly=false)")
+				t.Error("CSRF Cookie обязана быть читаемой из JS (HttpOnly=false)")
 			}
 			if c.MaxAge != 3600 {
-				t.Errorf("MaxAge csrf cookie = %d, хочу 3600", c.MaxAge)
+				t.Errorf("MaxAge CSRF Cookie = %d, ожидается: 3600", c.MaxAge)
 			}
 		}
 	}
@@ -845,7 +845,7 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 
@@ -857,11 +857,11 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 
-	t.Run("POST с токеном только в header (без cookie)", func(t *testing.T) {
+	t.Run("POST с токеном только в header (без Cookie)", func(t *testing.T) {
 		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
 		req := postJSON("/api/v1/register", validRegBody())
 		req.Header.Set("Origin", "https://app.example")
@@ -869,11 +869,11 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 
-	t.Run("POST с токеном только в cookie (без header)", func(t *testing.T) {
+	t.Run("POST с токеном только в Cookie (без Header)", func(t *testing.T) {
 		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
 		req := postJSON("/api/v1/register", validRegBody())
 		req.Header.Set("Origin", "https://app.example")
@@ -881,7 +881,7 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 
@@ -894,7 +894,7 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
-			t.Fatalf("статус = %d, хочу 403", rec.Code)
+			t.Fatalf("Статус = %d, ожидается: 403", rec.Code)
 		}
 	})
 }
@@ -920,7 +920,7 @@ func TestFullTokenLifecycle(t *testing.T) {
 	req.Header.Set("Origin", origin)
 	authH.CSRFToken(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("csrf: статус = %d, хочу 200", rec.Code)
+		t.Fatalf("CSRF: Статус = %d, ожидается: 200", rec.Code)
 	}
 	var csrfResp map[string]string
 	_ = json.Unmarshal(rec.Body.Bytes(), &csrfResp)
@@ -937,7 +937,7 @@ func TestFullTokenLifecycle(t *testing.T) {
 	rec = httptest.NewRecorder()
 	middleware.CSRF(cfg)(http.HandlerFunc(authH.Register)).ServeHTTP(rec, regReq)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("register: статус = %d, хочу 201; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Register: статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
 
 	// ШАГ 3. Login: получаем access_token и refresh_token в cookie.
@@ -950,12 +950,12 @@ func TestFullTokenLifecycle(t *testing.T) {
 	rec = httptest.NewRecorder()
 	middleware.CSRF(cfg)(http.HandlerFunc(authH.Login)).ServeHTTP(rec, loginReq)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("login: статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Login: статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 	cm := cookieMap(rec.Result().Cookies())
 	access, refresh := cm[auth.AccessCookie], cm[auth.RefreshCookie]
 	if access == "" || refresh == "" {
-		t.Fatal("login не установил access/refresh cookie")
+		t.Fatal("Login не установил Access/Refresh Cookie")
 	}
 
 	// ШАГ 4. Аутентифицированный запрос GET /users/me по access-токену.
@@ -966,44 +966,44 @@ func TestFullTokenLifecycle(t *testing.T) {
 		middleware.RequireUserOrAdmin(http.HandlerFunc(userH.Me)),
 	).ServeHTTP(rec, meReq)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("me: статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Me: Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 
 	// ШАГ 5. Refresh: ротация — cookie заменяются новой парой.
 	rec = httptest.NewRecorder()
 	authH.Refresh(rec, refreshRequest(refresh))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("refresh: статус = %d, хочу 200; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Refresh: статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 	}
 	rotated := cookieMap(rec.Result().Cookies())
 	refresh2 := rotated[auth.RefreshCookie]
 	if refresh2 == "" || refresh2 == refresh {
-		t.Fatal("ротация не произошла: refresh-токен не сменился")
+		t.Fatal("Ротация не произошла: refresh-токен не сменился")
 	}
 
 	// ШАГ 6. АТАКА (replay): злоумышленник переиспользует украденный старый refresh.
 	rec = httptest.NewRecorder()
 	authH.Refresh(rec, refreshRequest(refresh))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("replay: статус = %d, хочу 401", rec.Code)
+		t.Fatalf("Replay: статус = %d, ожидается: 401", rec.Code)
 	}
 
 	// ШАГ 7. После детекта replay все сессии отозваны: новый токен тоже не работает.
 	rec = httptest.NewRecorder()
 	authH.Refresh(rec, refreshRequest(refresh2))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("после replay сессии должны быть отозваны: статус = %d, хочу 401", rec.Code)
+		t.Fatalf("После replay сессии должны быть отозваны: статус = %d, ожидается: 401", rec.Code)
 	}
 
 	// ШАГ 8. Logout очищает cookie токенов (MaxAge = -1).
 	rec = httptest.NewRecorder()
 	authH.Logout(rec, httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("logout: статус = %d, хочу 200", rec.Code)
+		t.Fatalf("Logout: статус = %d, ожидается: 200", rec.Code)
 	}
 	for _, c := range rec.Result().Cookies() {
 		if (c.Name == auth.AccessCookie || c.Name == auth.RefreshCookie) && c.MaxAge != -1 {
-			t.Errorf("cookie %s не удалена при logout (MaxAge=%d)", c.Name, c.MaxAge)
+			t.Errorf("Cookie %s не удалена при logout (MaxAge = %d)", c.Name, c.MaxAge)
 		}
 	}
 }
