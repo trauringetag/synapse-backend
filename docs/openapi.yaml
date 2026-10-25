@@ -425,6 +425,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: Временная недоступность хранилища аутентификации или лимитера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /refresh:
     post:
       tags:

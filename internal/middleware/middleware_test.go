@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -737,11 +739,189 @@ func TestAuthenticate(t *testing.T) {
 	})
 }
 
-// TestRateLimit тестирует middleware ограничения частоты запросов
+// memoryRateLimitStore имитирует атомарное хранилище счетчиков без внешней БД.
+type memoryRateLimitStore struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	buckets map[string]memoryRateBucket
+	err     error
+}
+type memoryRateBucket struct {
+	start time.Time
+	hits  int
+}
+
+func newMemoryRateLimitStore() *memoryRateLimitStore {
+	return &memoryRateLimitStore{now: time.Now, buckets: make(map[string]memoryRateBucket)}
+}
+func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.err != nil {
+		return 0, s.err
+	}
+	if window <= 0 {
+		return 0, errors.New("window must be positive")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	bucket, ok := s.buckets[key]
+	if !ok || !bucket.start.Add(window).After(now) {
+		bucket = memoryRateBucket{start: now}
+	}
+	bucket.hits++
+	s.buckets[key] = bucket
+	return bucket.hits, nil
+}
+
+// TestRateLimit проверяет лимиты, изоляцию ключей, сброс окна и fail-closed без PostgreSQL.
 func TestRateLimit(t *testing.T) {
-	t.Run("Rate limiting блокирует превышение лимита", func(t *testing.T) {
-		// Для этого теста требуется подключение к PostgreSQL
-		// Тест помечается как интеграционный
-		t.Skip("Требуется подключение к БД для полноценного тестирования rate limiting")
+	t.Run("разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {
+		store := newMemoryRateLimitStore()
+		called := 0
+		h := RateLimitWithStore(store, 2, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called++
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		for i, want := range []int{http.StatusNoContent, http.StatusNoContent, http.StatusTooManyRequests} {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = "192.0.2.1:1234"
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != want {
+				t.Errorf("запрос %d: статус=%d, ожидается %d", i+1, rec.Code, want)
+			}
+			if i == 2 && rec.Header().Get("Retry-After") != "60" {
+				t.Errorf("Retry-After=%q, ожидается 60", rec.Header().Get("Retry-After"))
+			}
+		}
+		if called != 2 {
+			t.Errorf("обработчик вызван %d раз, ожидается 2", called)
+		}
 	})
+	t.Run("разные IP используют разные счетчики", func(t *testing.T) {
+		store := newMemoryRateLimitStore()
+		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		for _, ip := range []string{"192.0.2.1:1234", "192.0.2.2:1234"} {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = ip
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("первый запрос IP %s получил %d", ip, rec.Code)
+			}
+		}
+	})
+	t.Run("истекшее окно сбрасывает счетчик", func(t *testing.T) {
+		store := newMemoryRateLimitStore()
+		now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+		store.now = func() time.Time { return now }
+		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		makeReq := func() *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = "192.0.2.1:1234"
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec
+		}
+		if got := makeReq().Code; got != http.StatusNoContent {
+			t.Fatalf("первый запрос: %d", got)
+		}
+		if got := makeReq().Code; got != http.StatusTooManyRequests {
+			t.Fatalf("превышение лимита: %d", got)
+		}
+		now = now.Add(time.Minute)
+		if got := makeReq().Code; got != http.StatusNoContent {
+			t.Fatalf("после окна: %d", got)
+		}
+	})
+	t.Run("конкурентные запросы не обходят общий лимит", func(t *testing.T) {
+		store := newMemoryRateLimitStore()
+		var allowed int
+		var allowedMu sync.Mutex
+		h := RateLimitWithStore(store, 7, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			allowedMu.Lock()
+			allowed++
+			allowedMu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		var wg sync.WaitGroup
+		for i := 0; i < 40; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req.RemoteAddr = "192.0.2.9:1234"
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				if rec.Code != http.StatusNoContent && rec.Code != http.StatusTooManyRequests {
+					t.Errorf("неожиданный HTTP статус: %d", rec.Code)
+				}
+			}()
+		}
+		wg.Wait()
+		if allowed != 7 {
+			t.Errorf("успешно прошло %d запросов, лимит равен 7", allowed)
+		}
+	})
+	t.Run("ошибка хранилища закрывает доступ с 503", func(t *testing.T) {
+		store := newMemoryRateLimitStore()
+		store.err = errors.New("storage unavailable")
+		called := false
+		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("статус=%d, ожидается 503", rec.Code)
+		}
+		if called {
+			t.Error("обработчик вызван несмотря на ошибку хранилища")
+		}
+	})
+	t.Run("некорректная конфигурация не отключает защиту молча", func(t *testing.T) {
+		h := RateLimitWithStore(newMemoryRateLimitStore(), 0, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("обработчик не должен вызываться")
+		}))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("статус=%d, ожидается 503", rec.Code)
+		}
+	})
+}
+
+// TestAccountGlobalKey проверяет, что глобальный лимит действительно привязан к email,
+// а не превращает все учетные записи в один общий счетчик.
+func TestAccountGlobalKey(t *testing.T) {
+	request := func(body string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/login", strings.NewReader(body))
+		r.RemoteAddr = "192.0.2.1:1234"
+		return r
+	}
+	a := AccountGlobalKey(request(`{"email":" Alice@Example.com ","password":"x"}`))
+	b := AccountGlobalKey(request(`{"email":"bob@example.com","password":"x"}`))
+	c := AccountGlobalKey(request(`{"email":"alice@example.com","password":"y"}`))
+	if a != c {
+		t.Errorf("один email должен давать одинаковый ключ: %q != %q", a, c)
+	}
+	if a == b {
+		t.Errorf("разные email получили одинаковый ключ %q", a)
+	}
+}
+
+// TestAccountIPKeyPreservesBody проверяет, что извлечение ключа лимитера не съедает JSON,
+// необходимый следующему middleware и обработчику входа.
+func TestAccountIPKeyPreservesBody(t *testing.T) {
+	body := `{"email":"User@Example.com","password":"StrongPass123"}`
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	_ = AccountIPKey(r)
+	got, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatalf("тело изменилось: %q", string(got))
+	}
 }

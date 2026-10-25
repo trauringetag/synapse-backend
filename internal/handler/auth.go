@@ -144,6 +144,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.users.GetByEmail(r.Context(), email)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+		return
+	}
 	var isValidUser bool
 	if err == nil && user.Status == models.StatusActive {
 		isValidUser = true

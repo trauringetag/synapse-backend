@@ -112,7 +112,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	first := strings.TrimSpace(req.FirstName)
 	last := strings.TrimSpace(req.LastName)
 	role := strings.ToLower(strings.TrimSpace(req.Role))
-	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" || len(req.Password) < 8 {
+	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" || (len(req.Password) < 8 || len(req.Password) > 72) {
 		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
 			"email":      {messages.InvalidEmail},
 			"first_name": {messages.FirstNameRequired},
@@ -280,7 +280,7 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 	if email == "" || !strings.Contains(email, "@") {
 		errors["email"] = []string{messages.InvalidEmail}
 	}
-	if len(req.Password) < 8 {
+	if len(req.Password) < 8 || len(req.Password) > 72 {
 		errors["password"] = []string{messages.PasswordTooShort}
 	}
 	if firstName == "" {
@@ -362,7 +362,7 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		status = &v
 	}
 	if req.Password != nil {
-		if len(*req.Password) < 8 {
+		if len(*req.Password) < 8 || len(*req.Password) > 72 {
 			httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"password": {messages.PasswordTooShort}})
 			return
 		}

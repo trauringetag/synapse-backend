@@ -17,7 +17,7 @@ const (
 	InvalidOrExpiredRefreshToken = "Недействительный или просроченный Refresh-токен"
 	RevokedOrUnknownRefreshToken = "Refresh-токен отозван или неизвестен"
 
-	InvalidAdminToken = "Токен регистрации администратора не передан, либо является недействительным"
+	InvalidAdminToken = "Доступ к данному контуру ограничен"
 
 	UnexpectedSigningMethod = "Неожиданный метод подписания"
 	InvalidToken            = "Недопустимый токен"

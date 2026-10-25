@@ -144,17 +144,42 @@ func LimitBody(next http.Handler) http.Handler {
 	})
 }
 
+type RateLimitStore interface {
+	Increment(ctx context.Context, key string, window time.Duration) (int, error)
+}
+
+type postgresRateLimitStore struct{ pool *pgxpool.Pool }
+
+func (s postgresRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (int, error) {
+	if s.pool == nil {
+		return 0, errors.New("rate limit database is not configured")
+	}
+	if window < time.Second {
+		return 0, errors.New("rate limit window must be at least one second")
+	}
+	var count int
+	err := s.pool.QueryRow(ctx, `INSERT INTO api_rate_limits (bucket_key, window_start, hits) VALUES ($1, to_timestamp(floor(extract(epoch from now()) / $2) * $2), 1) ON CONFLICT (bucket_key) DO UPDATE SET window_start = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN EXCLUDED.window_start ELSE api_rate_limits.window_start END, hits = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN 1 ELSE api_rate_limits.hits + 1 END RETURNING hits`, key, int(window.Seconds())).Scan(&count)
+	return count, err
+}
+
 func RateLimit(pool *pgxpool.Pool, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+	return RateLimitWithStore(postgresRateLimitStore{pool: pool}, limit, window, keyFn)
+}
+
+func RateLimitWithStore(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if limit < 1 || window <= 0 || store == nil || keyFn == nil {
+				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				return
+			}
 			key := keyFn(r)
 			if key == "" {
 				key = "unknown"
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
-			var count int
-			err := pool.QueryRow(ctx, `INSERT INTO api_rate_limits (bucket_key, window_start, hits) VALUES ($1, to_timestamp(floor(extract(epoch from now()) / $2) * $2), 1) ON CONFLICT (bucket_key) DO UPDATE SET window_start = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN EXCLUDED.window_start ELSE api_rate_limits.window_start END, hits = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN 1 ELSE api_rate_limits.hits + 1 END RETURNING hits`, key, int(window.Seconds())).Scan(&count)
+			count, err := store.Increment(ctx, key, window)
 			if err != nil {
 				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
@@ -176,23 +201,30 @@ func ClientIP(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.RemoteAddr)
 }
-func AccountIPKey(r *http.Request) string {
+
+func loginEmail(r *http.Request) string {
+	if r.Body == nil {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, MaxJSONBodyBytes+1))
+	r.Body.Close()
+	r.Body = io.NopCloser(strings.NewReader(string(b)))
+	if err != nil || int64(len(b)) > MaxJSONBodyBytes {
+		return ""
+	}
 	var body struct {
 		Email string `json:"email"`
 	}
-	if r.Body != nil {
-		b, readErr := io.ReadAll(io.LimitReader(r.Body, MaxJSONBodyBytes+1))
-		r.Body.Close()
-		if readErr != nil || int64(len(b)) > MaxJSONBodyBytes {
-			if int64(len(b)) <= MaxJSONBodyBytes {
-				b = append(b, ' ')
-			}
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(b)))
-		_ = json.Unmarshal(b, &body)
+	if json.Unmarshal(b, &body) != nil {
+		return ""
 	}
-	return "login:" + ClientIP(r) + ":" + strings.ToLower(strings.TrimSpace(body.Email))
+	return strings.ToLower(strings.TrimSpace(body.Email))
 }
+
+func AccountIPKey(r *http.Request) string {
+	return "login:" + ClientIP(r) + ":" + loginEmail(r)
+}
+
 func IPKey(r *http.Request) string { return "ip:" + ClientIP(r) }
 func RefreshKey(r *http.Request) string {
 	c, e := r.Cookie("refresh_token")
@@ -286,10 +318,11 @@ func validCSRF(secret []byte, token string) bool {
 }
 
 func AccountGlobalKey(r *http.Request) string {
-	var body struct {
-		Email string `json:"email"`
+	email := loginEmail(r)
+	if email == "" {
+		return "login_global:invalid:" + ClientIP(r)
 	}
-	return "login_global:" + strings.ToLower(strings.TrimSpace(body.Email))
+	return "login_global:" + email
 }
 
 func UserKey(r *http.Request) string {
@@ -305,7 +338,6 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
 	})
 }
