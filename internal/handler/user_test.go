@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +52,59 @@ func withChiID(req *http.Request, id string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", id)
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+// expectedInvalidPaginationParams динамически вычисляет по query-строке, какие
+// параметры нарушают контракт API и потому обязаны присутствовать в details:
+//   - page:  целое >= 1 (если параметр не передан — валиден, значение по умолчанию 1);
+//   - limit: целое в диапазоне [1, 100] (не передан — валиден, по умолчанию 10).
+//
+// Тест опирается на контракт, а не на реализацию хендлера, поэтому переживёт
+// любые внутренние рефакторинги List.
+func expectedInvalidPaginationParams(t *testing.T, rawQuery string) []string {
+	t.Helper()
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatalf("не удалось разобрать query %q: %v", rawQuery, err)
+	}
+	var want []string
+	if v := q.Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil || n < 1 {
+			want = append(want, "page")
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 100 {
+			want = append(want, "limit")
+		}
+	}
+	return want
+}
+
+// assertDetailsExact проверяет, что details содержит РОВНО указанный набор ключей:
+// все ожидаемые присутствуют и нет лишних. Это важно после доработки хендлера
+// («выводится только по переданным невалидным полям»): лишние ключи — тоже ошибка.
+// Вызов без полей означает «details должен быть пустым/отсутствовать».
+func assertDetailsExact(t *testing.T, rec *httptest.ResponseRecorder, fields ...string) {
+	t.Helper()
+	var body struct {
+		Details map[string][]string `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("не удалось декодировать ответ: %v; body=%s", err, rec.Body.String())
+	}
+	wantSet := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		wantSet[f] = struct{}{}
+		if _, ok := body.Details[f]; !ok {
+			t.Errorf("в details отсутствует ключ %q; body=%s", f, rec.Body.String())
+		}
+	}
+	for fact := range body.Details {
+		if _, ok := wantSet[fact]; !ok {
+			t.Errorf("лишний ключ %q в details; body=%s", fact, rec.Body.String())
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -295,16 +350,54 @@ func TestList(t *testing.T) {
 		}
 	})
 
-	t.Run("невалидные параметры пагинации -> 400 с details page и limit", func(t *testing.T) {
+	t.Run("невалидные параметры пагинации -> 400 с details только по невалидным полям", func(t *testing.T) {
 		h, _ := newUserHandler()
-		for _, q := range []string{"?page=0", "?limit=0", "?limit=101", "?page=abc", "?limit=xyz", "?page=-2"} {
+
+		// Набор query-вариантов: невалиден только page, только limit и оба сразу.
+		queries := []string{
+			"?page=0",         // невалиден только page
+			"?page=-2",        // невалиден только page (отрицательный)
+			"?page=abc",       // невалиден только page (не число)
+			"?limit=0",        // невалиден только limit
+			"?limit=101",      // невалиден только limit (выше верхней границы)
+			"?limit=xyz",      // невалиден только limit (не число)
+			"?page=0&limit=0", // невалидны оба
+			"?page=abc&limit=xyz",
+			"?page=2&limit=101", // page валиден, limit невалиден
+			"?page=-1&limit=50", // page невалиден, limit валиден
+		}
+
+		for _, q := range queries {
+			t.Run(q, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users"+q, nil))
+
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("query %q: статус = %d, хочу 400; body=%s", q, rec.Code, rec.Body.String())
+				}
+
+				// Ожидаемый набор ключей выводится динамически из самой query-строки.
+				want := expectedInvalidPaginationParams(t, strings.TrimPrefix(q, "?"))
+				if len(want) == 0 {
+					t.Fatalf("query %q по построению должна быть невалидной", q)
+				}
+				// Проверяем точное совпадение множества ключей: ни пропусков, ни лишних.
+				assertDetailsExact(t, rec, want...)
+			})
+		}
+	})
+
+	t.Run("валидные параметры пагинации -> 200 и пустой details", func(t *testing.T) {
+		h, _ := newUserHandler()
+		for _, q := range []string{"", "?page=1", "?limit=100", "?page=2&limit=1", "?page=1&limit=100"} {
 			rec := httptest.NewRecorder()
 			h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users"+q, nil))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("query %q: статус = %d, хочу 400", q, rec.Code)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("query %q: статус = %d, хочу 200; body=%s", q, rec.Code, rec.Body.String())
 			}
-			assertDetail(t, rec, "page")
-			assertDetail(t, rec, "limit")
+			// При успехе details не должен содержать ни одного ключа.
+			assertDetailsExact(t, rec)
 		}
 	})
 
@@ -799,7 +892,7 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 	adminChain := middleware.Authenticate(cfg, store)(middleware.RequireAdmin(http.HandlerFunc(h.List)))
 
 	t.Run("обычный пользователь с валидным токеном -> 403", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: userPair.AccessToken})
 		rec := httptest.NewRecorder()
 		adminChain.ServeHTTP(rec, req)
@@ -810,7 +903,7 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 	})
 
 	t.Run("администратор с валидным токеном -> 200", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: adminPair.AccessToken})
 		rec := httptest.NewRecorder()
 		adminChain.ServeHTTP(rec, req)
@@ -821,7 +914,7 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 
 	t.Run("запрос без токена -> 401", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		adminChain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users", nil))
+		adminChain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&limit=100", nil))
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("статус = %d, хочу 401", rec.Code)
 		}

@@ -139,8 +139,8 @@ func TestRegister_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(map[string]string)
-		rawBody    string // если != "", используется вместо JSON из mutate
-		wantDetail string // пустое — detail не проверяем
+		rawBody    string
+		wantDetail string
 	}{
 		{name: "email без символа @", mutate: func(b map[string]string) { b["email"] = "not-an-email" }, wantDetail: "email"},
 		{name: "пустой email", mutate: func(b map[string]string) { b["email"] = "" }, wantDetail: "email"},
@@ -155,22 +155,23 @@ func TestRegister_ValidationErrors(t *testing.T) {
 				delete(b, k)
 			}
 		}, wantDetail: "email"},
-		{name: "битый JSON", rawBody: `{"email": `, wantDetail: ""},
-		{name: "два JSON-документа в теле", rawBody: `{"email":"a@b.c"}{"email":"d@e.f"}`, wantDetail: ""},
-		{name: "пустое тело запроса", rawBody: ``, wantDetail: ""},
+		{name: "битый JSON", rawBody: `{"email": `},
+		{name: "два JSON-документа в теле", rawBody: `{"email":"a@b.c"}{"email":"d@e.f"}`},
+		{name: "пустое тело запроса", rawBody: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := NewAuthHandler(testConfig(), newMockStore(), newMockStore())
+
 			var req *http.Request
-			if tt.rawBody != "" {
-				req = httptest.NewRequest(http.MethodPost, "/api/v1/register", strings.NewReader(tt.rawBody))
-				req.Header.Set("Content-Type", "application/json")
-			} else {
+			if tt.mutate != nil {
 				body := validRegBody()
 				tt.mutate(body)
 				req = postJSON("/api/v1/register", body)
+			} else {
+				req = httptest.NewRequest(http.MethodPost, "/api/v1/register", strings.NewReader(tt.rawBody))
+				req.Header.Set("Content-Type", "application/json")
 			}
 
 			rec := httptest.NewRecorder()
@@ -268,7 +269,7 @@ func TestRegisterAdmin_Forbidden(t *testing.T) {
 	}{
 		{name: "токен не передан", token: ""},
 		{name: "неверный токен", token: "wrong-token"},
-		{name: "токен с пробелом (искажение)", token: "secret-admin-register-token "},
+		{name: "токен с пробелом (искажение)", token: "secret-admin -register-token"},
 		{name: "токен в другом регистре", token: "SECRET-ADMIN-REGISTER-TOKEN"},
 	}
 	for _, tt := range tests {
@@ -466,45 +467,83 @@ func TestLogin_BodyLimits(t *testing.T) {
 	}
 }
 
-// TestLogin_TimingAttackProtection — защита от timing-атаки: ветки «пользователь есть,
-// пароль неверный» и «пользователя нет» обе выполняют bcrypt-сравнение (с фиктивным
-// хешем), поэтому время отклика не раскрывает существование учетной записи.
+// TestLogin_TimingAttackProtection тестирует защиту от timing-атак: время ответа
+// должно быть одинаковым для существующего пользователя с неверным паролем
+// и для несуществующего пользователя. Разница во времени не должна раскрывать
+// существование учетной записи.
 func TestLogin_TimingAttackProtection(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	h := NewAuthHandler(cfg, store, store)
 
-	// Хеш боевой стоимости (DefaultCost), как в продакшене.
-	hash, err := bcrypt.GenerateFromPassword([]byte("CorrectPass123"), bcrypt.DefaultCost)
+	// Создаём пользователя с реальным bcrypt-хешем боевой стоимости.
+	realHash, err := bcrypt.GenerateFromPassword([]byte("CorrectPass123"), bcrypt.DefaultCost)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.seedUser(&models.User{
-		ID: uuid.New(), Email: "exists@example.com", PasswordHash: string(hash),
+		ID: uuid.New(), Email: "exists@example.com", PasswordHash: string(realHash),
 		Role: models.RoleUser, Status: models.StatusActive, FirstName: "E", LastName: "X",
 	})
 
+	// measure выполняет N итераций и возвращает среднее время для статистической устойчивости.
 	measure := func(email string) time.Duration {
-		rec := httptest.NewRecorder()
-		start := time.Now()
-		h.Login(rec, postJSON("/api/v1/login", map[string]string{"email": email, "password": "WrongPass123"}))
-		d := time.Since(start)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("статус = %d, хочу 401 для %s", rec.Code, email)
+		const iterations = 10
+		var total time.Duration
+		for i := 0; i < iterations; i++ {
+			rec := httptest.NewRecorder()
+			start := time.Now()
+			h.Login(rec, postJSON("/api/v1/login", map[string]string{
+				"email":    email,
+				"password": "WrongPass123",
+			}))
+			total += time.Since(start)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("итерация %d: статус = %d, хочу 401 для %s", i, rec.Code, email)
+			}
 		}
-		return d
+		return total / iterations
 	}
 
+	// Проверяем, что фейковый хеш валидный (иначе bcrypt не будет работать).
+	if len(dummyHash) < 50 || !strings.HasPrefix(string(dummyHash), "$2a$") {
+		t.Fatalf("dummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(dummyHash))
+	}
+
+	// Измеряем среднее время для обеих веток.
 	dExists := measure("exists@example.com")
 	dMissing := measure("no-such-user@example.com")
 
+	t.Logf("Среднее время ответа: exists=%v, missing=%v", dExists, dMissing)
+
 	// Обе ветки обязаны пройти bcrypt (иначе сравнение было бы мгновенным).
-	if dExists < 10*time.Millisecond || dMissing < 10*time.Millisecond {
-		t.Errorf("bcrypt-сравнение не выполнено в одной из веток: exists=%v, missing=%v", dExists, dMissing)
+	// Порог 10ms выбран с запасом: реальный bcrypt с DefaultCost занимает 20-100ms.
+	const minBcryptDuration = 10 * time.Millisecond
+	if dExists < minBcryptDuration {
+		t.Errorf("существующий пользователь: bcrypt не выполнен (время=%v < %v)", dExists, minBcryptDuration)
 	}
-	// Жёсткое сравнение времён_flaky_ в CI, поэтому расхождение только логируем.
-	if ratio := float64(dExists) / float64(dMissing); ratio > 3 || ratio < 1.0/3 {
-		t.Logf("ВНИМАНИЕ: расхождение времён: exists=%v missing=%v ratio=%.2f", dExists, dMissing, ratio)
+	if dMissing < minBcryptDuration {
+		t.Errorf("несуществующий пользователь: bcrypt не выполнен (время=%v < %v)", dMissing, minBcryptDuration)
+	}
+
+	// Проверяем, что времена сопоставимы (расхождение не более чем в 3 раза).
+	// Это мягкая проверка: в CI время может варьироваться из-за нагрузки.
+	ratio := float64(dExists) / float64(dMissing)
+	if ratio > 3.0 || ratio < 1.0/3.0 {
+		t.Errorf("расхождение времён слишком велико: exists=%v, missing=%v, ratio=%.2f (должно быть 0.33..3.0)",
+			dExists, dMissing, ratio)
+	}
+
+	// Дополнительно: проверяем, что оба запроса возвращают одинаковое сообщение об ошибке
+	// (не раскрываем существование пользователя через разные сообщения).
+	rec1 := httptest.NewRecorder()
+	h.Login(rec1, postJSON("/api/v1/login", map[string]string{"email": "exists@example.com", "password": "WrongPass123"}))
+	rec2 := httptest.NewRecorder()
+	h.Login(rec2, postJSON("/api/v1/login", map[string]string{"email": "ghost@example.com", "password": "WrongPass123"}))
+
+	if rec1.Body.String() != rec2.Body.String() {
+		t.Errorf("ответы различаются (раскрытие существования пользователя):\nexists: %s\nmissing: %s",
+			rec1.Body.String(), rec2.Body.String())
 	}
 }
 

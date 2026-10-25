@@ -58,16 +58,25 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, errPage := strconv.Atoi(q.Get("page"))
-	if q.Get("page") == "" {
-		page = 1
+	page := 1
+	limit := 10
+	validationErrors := make(map[string][]string)
+	if pageStr := q.Get("page"); pageStr != "" {
+		var err error
+		page, err = strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			validationErrors["page"] = []string{messages.InvalidPageValue}
+		}
 	}
-	limit, errLimit := strconv.Atoi(q.Get("limit"))
-	if q.Get("limit") == "" {
-		limit = 10
+	if limitStr := q.Get("limit"); limitStr != "" {
+		var err error
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || limit < 1 || limit > 100 {
+			validationErrors["limit"] = []string{messages.InvalidLimitValue}
+		}
 	}
-	if errPage != nil || errLimit != nil || page < 1 || limit < 1 || limit > 100 {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidPageLimitParams, map[string][]string{"page": {messages.InvalidPageValue}, "limit": {messages.InvalidLimitValue}})
+	if len(validationErrors) > 0 {
+		httputil.Error(w, http.StatusBadRequest, messages.InvalidPageLimitParams, validationErrors)
 		return
 	}
 	role := strings.ToLower(strings.TrimSpace(q.Get("role")))

@@ -19,6 +19,20 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/repository"
 )
 
+var dummyHash []byte
+
+func init() {
+	hash, err := bcrypt.GenerateFromPassword(
+		[]byte("dummy-password-for-timing-attack-protection"),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		dummyHash = []byte("$2a$10$SomeHashThatWillNeverMatchAnyPassword12345678901234")
+	} else {
+		dummyHash = hash
+	}
+}
+
 type AuthHandler struct {
 	cfg    *config.Config
 	users  UserStore
@@ -138,7 +152,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if isValidUser {
 		hashToCompare = []byte(user.PasswordHash)
 	} else {
-		hashToCompare = []byte("$2a$10$Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5Q5")
+		hashToCompare = dummyHash
 	}
 	passwordErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
 	if !isValidUser || passwordErr != nil {
