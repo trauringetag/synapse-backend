@@ -45,7 +45,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Прослушивание на :%s (env=%s)", cfg.AppPort, cfg.AppEnv)
+		log.Printf("Прослушивание на: %s (env=%s)", cfg.AppPort, cfg.AppEnv)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
 		}
