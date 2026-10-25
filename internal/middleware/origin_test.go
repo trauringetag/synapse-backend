@@ -1,5 +1,3 @@
-// Файл: internal/middleware/origin_test.go
-
 package middleware
 
 import (
@@ -79,7 +77,7 @@ func TestRequireAllowedOrigin(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, должен быть %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 
 			// Проверяем, что следующий handler вызывается только при успешной проверке
@@ -151,7 +149,7 @@ func TestRequireAllowedOriginUsesRefererOnlyWhenOriginMissing(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, должен быть %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
 	}
@@ -218,7 +216,7 @@ func TestCSRFUsesRefererFallbackWhenOriginMissing(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("Статус = %d, должен быть %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+				t.Fatalf("Статус = %d, ожидается: %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
 	}
@@ -276,7 +274,7 @@ func TestRequestOriginParsing(t *testing.T) {
 
 			got := requestOrigin(req)
 			if got != tt.expected {
-				t.Errorf("requestOrigin() = %q, want %q", got, tt.expected)
+				t.Errorf("requestOrigin() = %q, ожидается: %q", got, tt.expected)
 			}
 		})
 	}
@@ -303,7 +301,7 @@ func TestIsAllowedOrigin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isAllowedOrigin(cfg, tt.origin)
 			if got != tt.allowed {
-				t.Errorf("isAllowedOrigin(%q) = %v, want %v", tt.origin, got, tt.allowed)
+				t.Errorf("isAllowedOrigin(%q) = %v, ожидается: %v", tt.origin, got, tt.allowed)
 			}
 		})
 	}

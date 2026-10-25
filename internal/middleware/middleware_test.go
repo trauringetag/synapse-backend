@@ -1,5 +1,3 @@
-// Файл: internal/middleware/middleware_test.go
-
 package middleware
 
 import (
