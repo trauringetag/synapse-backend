@@ -1,35 +1,13 @@
 package models
 
-import (
-	"time"
-
-	"github.com/google/uuid"
-)
+import "github.com/trauringetag/synapse-backend/internal/domain"
 
 const (
-	RoleUser       = "user"
-	RoleAdmin      = "admin"
-	StatusActive   = "active"
-	StatusInactive = "inactive"
+	RoleUser       = domain.RoleUser
+	RoleAdmin      = domain.RoleAdmin
+	StatusActive   = domain.StatusActive
+	StatusInactive = domain.StatusInactive
 )
 
-type User struct {
-	ID           uuid.UUID `json:"id"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"-"`
-	Role         string    `json:"role"`
-	Status       string    `json:"status"`
-	FirstName    string    `json:"first_name"`
-	LastName     string    `json:"last_name"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-type RefreshToken struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	TokenHash string
-	ExpiresAt time.Time
-	Revoked   bool
-	CreatedAt time.Time
-}
+type User = domain.User
+type RefreshToken = domain.RefreshToken

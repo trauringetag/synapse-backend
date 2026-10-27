@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/trauringetag/synapse-backend/internal/application"
 	"github.com/trauringetag/synapse-backend/internal/models"
 )
 
@@ -51,21 +52,9 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
 }
 
-type UserListFilter struct {
-	Page   int
-	Limit  int
-	Search string
-	Role   string
-	Status string
-}
+type UserListFilter = application.UserListFilter
 
-type UserListResult struct {
-	Items      []models.User `json:"items"`
-	Page       int           `json:"page"`
-	Limit      int           `json:"limit"`
-	Total      int64         `json:"total"`
-	TotalPages int64         `json:"total_pages"`
-}
+type UserListResult = application.UserListResult
 
 func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListResult, error) {
 	where := ` WHERE ($1 = '' OR role = $1) 

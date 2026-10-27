@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/trauringetag/synapse-backend/internal/application"
 	"github.com/trauringetag/synapse-backend/internal/httputil"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 	"github.com/trauringetag/synapse-backend/internal/middleware"
@@ -94,7 +95,7 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, nil)
 		return
 	}
-	result, err := h.users.List(r.Context(), repository.UserListFilter{Page: page, Limit: limit, Search: search, Role: role, Status: status})
+	result, err := h.users.List(r.Context(), application.UserListFilter{Page: page, Limit: limit, Search: search, Role: role, Status: status})
 	if err != nil {
 		httputil.Error(w, http.StatusInternalServerError, messages.FailedToGetUsersList, nil)
 		return
