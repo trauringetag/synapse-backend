@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trauringetag/synapse-backend/internal/models"
-	"github.com/trauringetag/synapse-backend/internal/repository"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
 // mockStore — потокобезопасное in-memory хранилище, реализующее интерфейсы
@@ -41,12 +41,12 @@ func (s *mockStore) seedUser(u *models.User) {
 
 // ------------------------- интерфейс UserStore -------------------------
 
-// Create дублирует ограничение UNIQUE(email) через repository.ErrConflict.
+// Create дублирует ограничение UNIQUE(email) через domain.ErrConflict.
 func (s *mockStore) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.usersByEmail[email]; ok {
-		return nil, repository.ErrConflict
+		return nil, domain.ErrConflict
 	}
 	u := &models.User{
 		ID: uuid.New(), Email: email, PasswordHash: passwordHash, Role: role,
@@ -64,7 +64,7 @@ func (s *mockStore) GetByID(ctx context.Context, id uuid.UUID) (*models.User, er
 	if u, ok := s.usersByID[id]; ok {
 		return u, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, domain.ErrNotFound
 }
 
 func (s *mockStore) GetByEmail(ctx context.Context, email string) (*models.User, error) {
@@ -73,11 +73,11 @@ func (s *mockStore) GetByEmail(ctx context.Context, email string) (*models.User,
 	if u, ok := s.usersByEmail[email]; ok {
 		return u, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, domain.ErrNotFound
 }
 
 // List воспроизводит пагинацию и фильтры role/status/search как в SQL.
-func (s *mockStore) List(ctx context.Context, f repository.UserListFilter) (*repository.UserListResult, error) {
+func (s *mockStore) List(ctx context.Context, f domain.UserListFilter) (*domain.UserListResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if f.Page < 1 {
@@ -113,7 +113,7 @@ func (s *mockStore) List(ctx context.Context, f repository.UserListFilter) (*rep
 	if end > len(filtered) {
 		end = len(filtered)
 	}
-	return &repository.UserListResult{Items: filtered[start:end], Page: f.Page, Limit: f.Limit, Total: total, TotalPages: totalPages}, nil
+	return &domain.UserListResult{Items: filtered[start:end], Page: f.Page, Limit: f.Limit, Total: total, TotalPages: totalPages}, nil
 }
 
 func (s *mockStore) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*models.User, error) {
@@ -121,10 +121,10 @@ func (s *mockStore) ReplaceProfile(ctx context.Context, id uuid.UUID, email, fir
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
 	if !ok {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if dup, ok2 := s.usersByEmail[email]; ok2 && dup.ID != id {
-		return nil, repository.ErrConflict
+		return nil, domain.ErrConflict
 	}
 	delete(s.usersByEmail, u.Email)
 	u.Email, u.FirstName, u.LastName = email, firstName, lastName
@@ -138,11 +138,11 @@ func (s *mockStore) Update(ctx context.Context, id uuid.UUID, email, firstName, 
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
 	if !ok {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if email != nil {
 		if dup, ok2 := s.usersByEmail[*email]; ok2 && dup.ID != id {
-			return nil, repository.ErrConflict
+			return nil, domain.ErrConflict
 		}
 		delete(s.usersByEmail, u.Email)
 		u.Email = *email
@@ -169,10 +169,10 @@ func (s *mockStore) Replace(ctx context.Context, id uuid.UUID, email, firstName,
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
 	if !ok {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if dup, ok2 := s.usersByEmail[email]; ok2 && dup.ID != id {
-		return nil, repository.ErrConflict
+		return nil, domain.ErrConflict
 	}
 	delete(s.usersByEmail, u.Email)
 	u.Email, u.FirstName, u.LastName = email, firstName, lastName
@@ -188,10 +188,10 @@ func (s *mockStore) Delete(ctx context.Context, id uuid.UUID) error {
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
 	if !ok {
-		return repository.ErrNotFound
+		return domain.ErrNotFound
 	}
 	if u.Role == models.RoleAdmin {
-		return repository.ErrProtected
+		return domain.ErrProtected
 	}
 	delete(s.usersByID, id)
 	delete(s.usersByEmail, u.Email)
@@ -215,7 +215,7 @@ func (s *mockStore) GetActive(ctx context.Context, tokenHash string) (*models.Re
 	defer s.mu.Unlock()
 	t, ok := s.tokens[tokenHash]
 	if !ok || t.Revoked || t.ExpiresAt.Before(time.Now()) {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	return t, nil
 }
@@ -227,20 +227,20 @@ func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID u
 	defer s.mu.Unlock()
 	t, ok := s.tokens[oldHash]
 	if !ok {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if t.Revoked {
-		return nil, repository.ErrRefreshTokenReplay
+		return nil, domain.ErrRefreshTokenReplay
 	}
 	if t.ExpiresAt.Before(time.Now()) {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if t.UserID != expectedUserID {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	u, ok := s.usersByID[t.UserID]
 	if !ok {
-		return nil, repository.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if u.Status != models.StatusActive {
 		// как в БД: гасим все токены неактивного пользователя
@@ -249,7 +249,7 @@ func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID u
 				tt.Revoked = true
 			}
 		}
-		return nil, repository.ErrInactiveTokenUser
+		return nil, domain.ErrInactiveTokenUser
 	}
 	newHash, expiresAt, err := createSuccessor(u)
 	if err != nil {

@@ -20,12 +20,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trauringetag/synapse-backend/internal/auth"
-	"github.com/trauringetag/synapse-backend/internal/config"
-	"github.com/trauringetag/synapse-backend/internal/httputil"
+	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
-	"github.com/trauringetag/synapse-backend/internal/models"
-	"github.com/trauringetag/synapse-backend/internal/repository"
 )
 
 type ctxKey string
@@ -67,30 +67,30 @@ func Authenticate(cfg *config.Config, users UserLookup) func(http.Handler) http.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := auth.ReadCookie(r, auth.AccessCookie)
 			if err != nil || raw == "" {
-				httputil.Error(w, http.StatusUnauthorized, messages.AuthorizationRequired, nil)
+				response.Error(w, http.StatusUnauthorized, messages.AuthorizationRequired, nil)
 				return
 			}
 			claims, err := auth.Parse(cfg, raw, "access")
 			if err != nil {
-				httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredAccessToken, nil)
+				response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredAccessToken, nil)
 				return
 			}
 			id, err := uuid.Parse(claims.Subject)
 			if err != nil || id == uuid.Nil {
-				httputil.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
+				response.Error(w, http.StatusUnauthorized, messages.InvalidSubjectToken, nil)
 				return
 			}
 			user, err := users.GetByID(r.Context(), id)
 			if err != nil {
-				if errors.Is(err, repository.ErrNotFound) {
-					httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+				if errors.Is(err, domain.ErrNotFound) {
+					response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 					return
 				}
-				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
 			}
 			if user.Status != models.StatusActive {
-				httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+				response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 				return
 			}
 			p := &Principal{ID: user.ID, Email: user.Email, Role: user.Role}
@@ -113,11 +113,11 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
 			if !ok {
-				httputil.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+				response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 				return
 			}
 			if _, ok := allowed[p.Role]; !ok {
-				httputil.Error(w, http.StatusForbidden, messages.InsufficientPermissions, nil)
+				response.Error(w, http.StatusForbidden, messages.InsufficientPermissions, nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -170,7 +170,7 @@ func RateLimitWithStore(store RateLimitStore, limit int, window time.Duration, k
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if limit < 1 || window <= 0 || store == nil || keyFn == nil {
-				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
 			}
 			key := keyFn(r)
@@ -181,12 +181,12 @@ func RateLimitWithStore(store RateLimitStore, limit int, window time.Duration, k
 			defer cancel()
 			count, err := store.Increment(ctx, key, window)
 			if err != nil {
-				httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
 			}
 			if count > limit {
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
-				httputil.Error(w, http.StatusTooManyRequests, "Слишком много запросов", nil)
+				response.Error(w, http.StatusTooManyRequests, "Слишком много запросов", nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -240,7 +240,7 @@ func RequireAllowedOrigin(cfg *config.Config) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := requestOrigin(r)
 			if !isAllowedOrigin(cfg, origin) {
-				httputil.Error(w, http.StatusForbidden, messages.InvalidOrigin, nil)
+				response.Error(w, http.StatusForbidden, messages.InvalidOrigin, nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -280,13 +280,13 @@ func CSRF(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 			origin := requestOrigin(r)
 			if !isAllowedOrigin(cfg, origin) {
-				httputil.Error(w, http.StatusForbidden, messages.InvalidOrigin, nil)
+				response.Error(w, http.StatusForbidden, messages.InvalidOrigin, nil)
 				return
 			}
 			c, err := r.Cookie("csrf_token")
 			token := r.Header.Get("X-CSRF-Token")
 			if err != nil || token == "" || !validCSRF(cfg.JWTSecret, c.Value) || !hmac.Equal([]byte(token), []byte(c.Value)) {
-				httputil.Error(w, http.StatusForbidden, messages.InvalidCSRFToken, nil)
+				response.Error(w, http.StatusForbidden, messages.InvalidCSRFToken, nil)
 				return
 			}
 			next.ServeHTTP(w, r)

@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/trauringetag/synapse-backend/internal/auth"
-	"github.com/trauringetag/synapse-backend/internal/config"
-	"github.com/trauringetag/synapse-backend/internal/models"
-	"github.com/trauringetag/synapse-backend/internal/repository"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 )
 
 // mockUserRepository создает моковое хранилище пользователей для тестов
@@ -36,7 +36,7 @@ func (m *mockUserLookup) GetByID(ctx context.Context, id uuid.UUID) (*models.Use
 	if u, ok := m.users[id]; ok {
 		return u, nil
 	}
-	return nil, repository.ErrNotFound
+	return nil, domain.ErrNotFound
 }
 
 var _ UserLookup = (*mockUserLookup)(nil)

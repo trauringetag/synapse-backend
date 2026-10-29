@@ -10,13 +10,12 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	"github.com/trauringetag/synapse-backend/internal/config"
-	"github.com/trauringetag/synapse-backend/internal/handler"
-	"github.com/trauringetag/synapse-backend/internal/middleware"
-	"github.com/trauringetag/synapse-backend/internal/repository"
+	"github.com/trauringetag/synapse-backend/internal/delivery/http/handler"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 )
 
-func New(cfg *config.Config, users *repository.UserRepository, tokens *repository.TokenRepository, pool *pgxpool.Pool, openAPI []byte) http.Handler {
+func New(cfg *config.Config, users handler.UserStore, tokens handler.TokenStore, pool *pgxpool.Pool, openAPI []byte) http.Handler {
 	authH := handler.NewAuthHandler(cfg, users, tokens)
 	userH := handler.NewUserHandler(users, tokens)
 

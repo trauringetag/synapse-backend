@@ -10,13 +10,13 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/trauringetag/synapse-backend/internal/auth"
-	"github.com/trauringetag/synapse-backend/internal/config"
-	"github.com/trauringetag/synapse-backend/internal/httputil"
+	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
-	"github.com/trauringetag/synapse-backend/internal/middleware"
-	"github.com/trauringetag/synapse-backend/internal/models"
-	"github.com/trauringetag/synapse-backend/internal/repository"
 )
 
 var dummyHash []byte
@@ -71,8 +71,8 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 
 	var req registerRequest
 
-	if err := httputil.Decode(r, &req); err != nil {
-		httputil.DecodeError(w, err)
+	if err := response.Decode(r, &req); err != nil {
+		response.DecodeError(w, err)
 		return
 	}
 
@@ -103,49 +103,49 @@ func (h *AuthHandler) registerWithRole(w http.ResponseWriter, r *http.Request, r
 		errors["last_name"] = []string{messages.LastNameRequired}
 	}
 	if len(errors) > 0 {
-		httputil.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, errors)
+		response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, errors)
 		return
 	}
 
 	if requireAdminToken {
 		provided := strings.TrimSpace(r.Header.Get("X-Admin-Token"))
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(h.cfg.AdminRegisterToken)) != 1 {
-			httputil.Error(w, http.StatusForbidden, messages.InvalidAdminToken, nil)
+			response.Error(w, http.StatusForbidden, messages.InvalidAdminToken, nil)
 			return
 		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
+		response.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
 		return
 	}
 	user, err := h.users.Create(r.Context(), email, string(hash), role, firstName, lastName)
-	if err == repository.ErrConflict {
-		httputil.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
+	if err == domain.ErrConflict {
+		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
 		return
 	}
 	if err != nil {
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToCreateUser, nil)
+		response.Error(w, http.StatusInternalServerError, messages.FailedToCreateUser, nil)
 		return
 	}
-	httputil.JSON(w, http.StatusCreated, user)
+	response.JSON(w, http.StatusCreated, user)
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := httputil.Decode(r, &req); err != nil {
-		httputil.DecodeError(w, err)
+	if err := response.Decode(r, &req); err != nil {
+		response.DecodeError(w, err)
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if len(email) > 255 || len(req.Password) > 72 {
-		httputil.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
+		response.Error(w, http.StatusBadRequest, messages.InvalidJSONBody, nil)
 		return
 	}
 	user, err := h.users.GetByEmail(r.Context(), email)
-	if err != nil && !errors.Is(err, repository.ErrNotFound) {
-		httputil.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 		return
 	}
 	var isValidUser bool
@@ -160,14 +160,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	passwordErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
 	if !isValidUser || passwordErr != nil {
-		httputil.Error(w, http.StatusUnauthorized, messages.InvalidCredentials, nil)
+		response.Error(w, http.StatusUnauthorized, messages.InvalidCredentials, nil)
 		return
 	}
 	if err := h.issueSession(w, r, user); err != nil {
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
+		response.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
 		return
 	}
-	httputil.JSON(w, http.StatusOK, map[string]any{
+	response.JSON(w, http.StatusOK, map[string]any{
 		"message": messages.AuthorizationSuccessful,
 		"user":    user,
 	})
@@ -176,7 +176,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	reject := func() {
 		auth.ClearTokenCookies(w, h.cfg)
-		httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+		response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 	}
 	raw, err := auth.ReadCookie(r, auth.RefreshCookie)
 	if err != nil || raw == "" {
@@ -188,7 +188,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		reject()
 		return
 	}
-	id, err := repository.UUIDFromString(claims.Subject)
+	id, err := domain.UUIDFromString(claims.Subject)
 	if err != nil {
 		reject()
 		return
@@ -204,28 +204,28 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		auth.ClearTokenCookies(w, h.cfg)
-		if errors.Is(err, repository.ErrRefreshTokenReplay) {
+		if errors.Is(err, domain.ErrRefreshTokenReplay) {
 			log.Printf("security_event=refresh_token_reuse user_id=%s", id.String())
 			if revokeErr := h.tokens.RevokeAllForUser(r.Context(), id); revokeErr != nil {
 				log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", id.String(), revokeErr)
 			}
 			auth.ClearTokenCookies(w, h.cfg)
-			httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+			response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 			return
 		}
-		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrInactiveTokenUser) {
-			if errors.Is(err, repository.ErrInactiveTokenUser) {
+		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrInactiveTokenUser) {
+			if errors.Is(err, domain.ErrInactiveTokenUser) {
 				log.Printf("security_event=refresh_denied_inactive_user user_id=%s", id.String())
 			}
-			httputil.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+			response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 			return
 		}
 		log.Printf("event=refresh_rotation_failed user_id=%s error_type=%T", id.String(), err)
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
+		response.Error(w, http.StatusInternalServerError, messages.FailedToIssueTokens, nil)
 		return
 	}
 	auth.SetTokenCookies(w, h.cfg, pair)
-	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
+	response.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -234,17 +234,17 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		if err := h.tokens.Revoke(r.Context(), auth.HashToken(raw)); err != nil {
 			log.Printf("event=logout_refresh_revoke_failed error_type=%T", err)
 			auth.ClearTokenCookies(w, h.cfg)
-			httputil.Error(w, http.StatusInternalServerError, messages.FailedToRevokeRefreshToken, nil)
+			response.Error(w, http.StatusInternalServerError, messages.FailedToRevokeRefreshToken, nil)
 			return
 		}
 	}
 	auth.ClearTokenCookies(w, h.cfg)
-	httputil.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})
+	response.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})
 }
 
 func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, user *models.User) error {
 	if user == nil || user.Status != models.StatusActive {
-		return repository.ErrNotFound
+		return domain.ErrNotFound
 	}
 	pair, err := auth.IssuePair(h.cfg, user.ID, user.Email, user.Role)
 	if err != nil {
@@ -260,9 +260,9 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, user 
 func (h *AuthHandler) CSRFToken(w http.ResponseWriter, r *http.Request) {
 	token, err := middleware.IssueCSRF(h.cfg.JWTSecret)
 	if err != nil {
-		httputil.Error(w, http.StatusInternalServerError, messages.FailedToPrepareCSRFProtection, nil)
+		response.Error(w, http.StatusInternalServerError, messages.FailedToPrepareCSRFProtection, nil)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "csrf_token", Value: token, Path: "/api/v1/", Secure: h.cfg.CookieSecure, HttpOnly: false, SameSite: h.cfg.CookieSameSite, MaxAge: 3600})
-	httputil.JSON(w, http.StatusOK, map[string]string{"csrf_token": token})
+	response.JSON(w, http.StatusOK, map[string]string{"csrf_token": token})
 }

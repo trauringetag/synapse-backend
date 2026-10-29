@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/trauringetag/synapse-backend/internal/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 )
 
 // TestRequireAllowedOrigin тестирует middleware проверки разрешенных источников (CORS)

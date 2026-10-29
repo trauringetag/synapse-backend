@@ -1,4 +1,4 @@
-package httputil
+package response
 
 import (
 	"encoding/json"

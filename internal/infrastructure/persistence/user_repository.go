@@ -1,21 +1,17 @@
-package repository
+package persistence
 
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/trauringetag/synapse-backend/internal/models"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
-
-var ErrNotFound = errors.New("not found")
-var ErrConflict = errors.New("conflict")
-var ErrProtected = errors.New("protected user")
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -36,7 +32,7 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, 
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, ErrConflict
+			return nil, domain.ErrConflict
 		}
 		return nil, err
 	}
@@ -51,21 +47,9 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
 }
 
-type UserListFilter struct {
-	Page   int
-	Limit  int
-	Search string
-	Role   string
-	Status string
-}
+type UserListFilter = domain.UserListFilter
 
-type UserListResult struct {
-	Items      []models.User `json:"items"`
-	Page       int           `json:"page"`
-	Limit      int           `json:"limit"`
-	Total      int64         `json:"total"`
-	TotalPages int64         `json:"total_pages"`
-}
+type UserListResult = domain.UserListResult
 
 func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListResult, error) {
 	where := ` WHERE ($1 = '' OR role = $1) 
@@ -125,11 +109,11 @@ func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email
 		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
 	`, id, email, firstName, lastName).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, ErrConflict
+			return nil, domain.ErrConflict
 		}
 		return nil, err
 	}
@@ -157,11 +141,11 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, ErrConflict
+			return nil, domain.ErrConflict
 		}
 		return nil, err
 	}
@@ -184,11 +168,11 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, ErrConflict
+			return nil, domain.ErrConflict
 		}
 		return nil, err
 	}
@@ -207,15 +191,15 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	var role string
 	err = r.pool.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, id).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		return domain.ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
 	if role == models.RoleAdmin {
-		return ErrProtected
+		return domain.ErrProtected
 	}
-	return ErrNotFound
+	return domain.ErrNotFound
 }
 
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*models.User, error) {
@@ -224,7 +208,7 @@ func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*model
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -235,12 +219,4 @@ func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*model
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func UUIDFromString(s string) (uuid.UUID, error) {
-	id, err := uuid.Parse(s)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("Неверный идентификатор")
-	}
-	return id, nil
 }

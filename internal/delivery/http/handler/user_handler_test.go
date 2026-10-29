@@ -21,11 +21,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trauringetag/synapse-backend/internal/auth"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
-	"github.com/trauringetag/synapse-backend/internal/middleware"
-	"github.com/trauringetag/synapse-backend/internal/models"
-	"github.com/trauringetag/synapse-backend/internal/repository"
 )
 
 // nilCtx — контекст по умолчанию для вызовов хранилища в тестах.
@@ -323,7 +323,7 @@ func TestList(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("Статус = %d, ожидается: 200", rec.Code)
 		}
-		var res repository.UserListResult
+		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if len(res.Items) != 10 || res.Total != 12 || res.Page != 1 {
 			t.Errorf("Пагинация по умолчанию: items = %d, total = %d, page = %d", len(res.Items), res.Total, res.Page)
@@ -336,7 +336,7 @@ func TestList(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?page=2&limit=10", nil))
-		var res repository.UserListResult
+		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if len(res.Items) != 10 || res.TotalPages != 3 {
 			t.Errorf("Страница 2: items = %d, totalPages = %d", len(res.Items), res.TotalPages)
@@ -407,7 +407,7 @@ func TestList(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?role=admin&limit=100", nil))
-		var res repository.UserListResult
+		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		for _, it := range res.Items {
 			if it.Role != models.RoleAdmin {
@@ -434,7 +434,7 @@ func TestList(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?status=inactive", nil))
-		var res repository.UserListResult
+		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if res.Total != 1 || res.Items[0].Email != "blocked@example.com" {
 			t.Errorf("Фильтр status = inactive: %+v", res.Items)
@@ -456,7 +456,7 @@ func TestList(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?search=findme", nil))
-		var res repository.UserListResult
+		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		if res.Total != 1 || res.Items[0].Email != "findme@example.com" {
 			t.Errorf("Поиск: %+v", res.Items)

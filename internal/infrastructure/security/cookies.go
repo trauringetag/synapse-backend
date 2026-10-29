@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/trauringetag/synapse-backend/internal/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 )
 
 const (

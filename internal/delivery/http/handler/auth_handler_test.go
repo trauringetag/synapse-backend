@@ -18,11 +18,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trauringetag/synapse-backend/internal/auth"
-	"github.com/trauringetag/synapse-backend/internal/config"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
-	"github.com/trauringetag/synapse-backend/internal/middleware"
-	"github.com/trauringetag/synapse-backend/internal/models"
 )
 
 // testConfig возвращает конфигурацию, единую для всех тестов пакета.

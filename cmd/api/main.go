@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/trauringetag/synapse-backend/docs"
-	"github.com/trauringetag/synapse-backend/internal/config"
-	"github.com/trauringetag/synapse-backend/internal/db"
-	"github.com/trauringetag/synapse-backend/internal/repository"
-	"github.com/trauringetag/synapse-backend/internal/router"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/database"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/persistence"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/transport"
 )
 
 func main() {
@@ -31,8 +31,8 @@ func main() {
 	}
 	defer pool.Close()
 
-	users := repository.NewUserRepository(pool)
-	tokens := repository.NewTokenRepository(pool)
+	users := persistence.NewUserRepository(pool)
+	tokens := persistence.NewTokenRepository(pool)
 	handler := router.New(cfg, users, tokens, pool, docs.OpenAPI)
 
 	srv := &http.Server{

@@ -1,4 +1,4 @@
-package repository
+package persistence
 
 import (
 	"context"
@@ -10,11 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/trauringetag/synapse-backend/internal/models"
+	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
-
-var ErrRefreshTokenReplay = errors.New("Обнаружено повторное использование Refresh-токена")
-var ErrInactiveTokenUser = errors.New("Refresh-токен: пользователь неактивен или токен отсутствует")
 
 type TokenRepository struct {
 	pool *pgxpool.Pool
@@ -40,7 +38,7 @@ func (r *TokenRepository) GetActive(ctx context.Context, tokenHash string) (*mod
 		WHERE token_hash = $1
 	`, tokenHash).Scan(&t.ID, &t.UserID, &t.TokenHash, &t.ExpiresAt, &t.Revoked, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -72,18 +70,18 @@ func (r *TokenRepository) Rotate(
 		var expiresAt time.Time
 		lookupErr := tx.QueryRow(ctx, `SELECT revoked, expires_at FROM refresh_tokens WHERE token_hash = $1`, oldHash).Scan(&revoked, &expiresAt)
 		if lookupErr == nil && revoked {
-			return nil, ErrRefreshTokenReplay
+			return nil, domain.ErrRefreshTokenReplay
 		}
 		if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("Проверьте refresh-токен после неудачного использования: %w", lookupErr)
 		}
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Использовать refresh-токен: %w", err)
 	}
 	if userID != expectedUserID {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 
 	var user models.User
@@ -99,7 +97,7 @@ func (r *TokenRepository) Rotate(
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return nil, fmt.Errorf("Применить отзыв прав для неактивного пользователя: %w", commitErr)
 		}
-		return nil, ErrInactiveTokenUser
+		return nil, domain.ErrInactiveTokenUser
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Загрузить refresh-токен для пользователя: %w", err)
