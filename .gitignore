@@ -1,7 +1,13 @@
+# ========== Секреты и локальное окружение ==========
+# .env хранит JWT_SECRET, ADMIN_REGISTER_TOKEN, DATABASE_URL — коммит запрещён.
+# Закомментированные строки в старом варианте означали, что .env МОГ попасть в git.
 # .env
-# .env.local
-# .env.*.local
-# .env.test
+# .env.*
+# !.env.example
+# !.env.sample
+# !.env.template
+
+# ========== Артефакты сборки Go ==========
 *.exe
 *.exe~
 *.dll
@@ -9,18 +15,42 @@
 *.dylib
 *.test
 *.out
-coverage.html
-pprof/
-vendor/
+/api
+/server
+bin/
+out/
+dist/
+
+# Локальные workspace-файлы Go (мешают CI, не коммитим)
+go.work
+go.work.sum
+
+# ========== Локальные инструменты разработчика ==========
 .bin/
 .tmp/
 tmp/
+
+# ========== Тесты и профилирование ==========
+coverage.html
+cover.html
+pprof/
+
+# ========== IDE и редакторы ==========
 .idea/
-# .vscode/
+# Командные настройки VS Code шарим, персональные (launch.json и т.п.) — нет
+# .vscode/*
+# !.vscode/settings.json
+# !.vscode/extensions.json
 *.swp
 *.swo
-*~
 *.swn
+*~
+
+# ========== Логи ==========
+*.log
+nohup.out
+
+# ========== Операционные системы ==========
 .DS_Store
 .DS_Store?
 ._*
@@ -28,4 +58,7 @@ tmp/
 .Trashes
 Thumbs.db
 ehthumbs.db
+
+# ========== Docker ==========
+# Персональные оверрады (порты, тома) не коммитим; базовый compose — коммитим
 docker-compose.override.yml
