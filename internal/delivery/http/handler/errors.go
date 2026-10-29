@@ -10,17 +10,31 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
-// respondError — единая точка преобразования ошибок в HTTP-ответ.
+// handleUseCaseError — helper для маппинга ошибок слоя use-case на HTTP-ответ.
 //
 // Тонкий HTTP-слой не знает бизнес-правил: он получает *usecase.UseCaseError,
-// у которой код ошибки уже классифицирован слоем use-case, и отображает его
-// на HTTP-статус + сообщение + детали валидации по полям.
+// у которой код ошибки уже классифицирован слоем use-case (Code), и отображает
+// её на HTTP-статус (через ErrorCode.HTTPStatus) + сообщение + детали
+// валидации по полям (Details).
 //
-// Если ошибка не является UseCaseError (например, доменный sentinel, возникший
-// вне слоя use-case), применяется запасное отображение domain-ошибок.
+// Возвращает true, если ошибка является *usecase.UseCaseError и ответ сформирован.
+func handleUseCaseError(w http.ResponseWriter, err error) bool {
+	ucErr, ok := usecase.AsUseCaseError(err)
+	if !ok {
+		return false
+	}
+	response.Error(w, ucErr.Code.HTTPStatus(), ucErr.Message, ucErr.Details)
+	return true
+}
+
+// respondError — единая точка преобразования ошибок в HTTP-ответ.
+//
+// Сначала применяется helper handleUseCaseError (основной путь для тонких
+// handlers). Если ошибка не является UseCaseError (например, доменный
+// sentinel, возникший вне слоя use-case), применяется запасное отображение
+// domain-ошибок.
 func respondError(w http.ResponseWriter, err error) {
-	if ucErr, ok := usecase.AsUseCaseError(err); ok {
-		response.Error(w, ucErr.Code.HTTPStatus(), ucErr.Message, ucErr.Details)
+	if handleUseCaseError(w, err) {
 		return
 	}
 	switch {
