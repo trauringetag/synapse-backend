@@ -1,33 +1,25 @@
 package usecase
 
 import (
-	"context"
-	"time"
-
-	"github.com/google/uuid"
-
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
-// UserRepository — порт хранилища пользователей, необходимый слою use-case.
-// Инфраструктурная реализация — internal/infrastructure/persistence.UserRepository.
-type UserRepository interface {
-	Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
-	GetByEmail(ctx context.Context, email string) (*models.User, error)
-	List(ctx context.Context, f domain.UserListFilter) (*domain.UserListResult, error)
-	ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*models.User, error)
-	Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*models.User, error)
-	Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*models.User, error)
-	Delete(ctx context.Context, id uuid.UUID) error
-}
+// Порты репозиториев объявлены во внутреннем круге — пакете internal/domain
+// (Clean Architecture: источник правды для контрактов хранилища — domain/ports.go).
+// Здесь оставлены только type-алиасы для обратной совместимости: старый код,
+// тесты и моки, ссылающиеся на usecase.UserRepository / usecase.TokenRepository,
+// продолжают работать без изменений, поскольку алиас — это тот же самый тип.
+//
+// Алиасы для обратной совместимости (будут удалены в следующем мажорном релизе).
+// Новый код должен ссылаться напрямую на domain.UserRepository и
+// domain.RefreshTokenRepository.
+type (
+	// UserRepository — алиас порта хранилища пользователей из домена.
+	// Инфраструктурная реализация — internal/infrastructure/persistence.UserRepository.
+	UserRepository = domain.UserRepository
 
-// TokenRepository — порт хранилища refresh-токенов.
-// Инфраструктурная реализация — internal/infrastructure/persistence.TokenRepository.
-type TokenRepository interface {
-	Store(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error
-	Rotate(ctx context.Context, oldHash string, expectedUserID uuid.UUID, createSuccessor func(*models.User) (string, time.Time, error)) (*models.User, error)
-	Revoke(ctx context.Context, tokenHash string) error
-	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
-}
+	// TokenRepository — алиас порта хранилища refresh-токенов из домена
+	// (каноническое имя в domain — RefreshTokenRepository).
+	// Инфраструктурная реализация — internal/infrastructure/persistence.TokenRepository.
+	TokenRepository = domain.RefreshTokenRepository
+)

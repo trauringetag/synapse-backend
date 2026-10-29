@@ -18,6 +18,10 @@ type TokenRepository struct {
 	pool *pgxpool.Pool
 }
 
+// Компиляционная проверка: реализация удовлетворяет порту RefreshTokenRepository
+// из домена (единственный источник правды — internal/domain/ports.go).
+var _ domain.RefreshTokenRepository = (*TokenRepository)(nil)
+
 func NewTokenRepository(pool *pgxpool.Pool) *TokenRepository {
 	return &TokenRepository{pool: pool}
 }

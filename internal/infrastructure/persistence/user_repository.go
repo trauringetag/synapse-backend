@@ -17,6 +17,10 @@ type UserRepository struct {
 	pool *pgxpool.Pool
 }
 
+// Компиляционная проверка: реализация удовлетворяет порту из домена
+// (единственный источник правды — internal/domain/ports.go).
+var _ domain.UserRepository = (*UserRepository)(nil)
+
 func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
 }

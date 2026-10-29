@@ -60,8 +60,9 @@ type CSRFIssuer interface {
 // AuthUseCaseImpl — реализация AuthUseCase. Содержит всю бизнес-логику
 // аутентификации, которая ранее находилась в HTTP-обработчике auth_handler.go.
 type AuthUseCaseImpl struct {
-	users      UserRepository
-	tokens     TokenRepository
+	// Порты репозиториев — из домена (единственный источник правды: domain/ports.go).
+	users      domain.UserRepository
+	tokens     domain.RefreshTokenRepository
 	hasher     PasswordHasher // порт хеширования паролей (реализация — в инфраструктуре)
 	issuer     TokenIssuer
 	csrf       CSRFIssuer
@@ -73,8 +74,8 @@ type AuthUseCaseImpl struct {
 // (DI): репозитории, порт хеширования паролей, генератор токенов, CSRF-генератор
 // и секретный токен админской регистрации.
 func NewAuthUseCase(
-	users UserRepository,
-	tokens TokenRepository,
+	users domain.UserRepository,
+	tokens domain.RefreshTokenRepository,
 	hasher PasswordHasher,
 	issuer TokenIssuer,
 	csrf CSRFIssuer,

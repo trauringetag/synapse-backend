@@ -284,8 +284,12 @@ func (s *mockStore) RevokeAllForUser(ctx context.Context, userID uuid.UUID) erro
 	return nil
 }
 
-// Компиляционная проверка соответствия мока портам use-case слоя.
+// Компиляционные проверки: моки реализуют порты репозиториев из домена
+// (единственный источник правды — internal/domain/ports.go).
 var (
+	_ domain.UserRepository         = (*mockStore)(nil)
+	_ domain.RefreshTokenRepository = (*mockStore)(nil)
+	// Алиасы use-case слоя указывают на те же самые интерфейсы domain.
 	_ usecase.UserRepository  = (*mockStore)(nil)
 	_ usecase.TokenRepository = (*mockStore)(nil)
 )

@@ -18,13 +18,14 @@ import (
 // проверку допустимых ролей/статусов, отзыв сессий при смене пароля и
 // защиту от удаления собственной учетной записи.
 type UserUseCaseImpl struct {
-	users  UserRepository
-	tokens TokenRepository
+	// Порты репозиториев — из домена (единственный источник правды: domain/ports.go).
+	users  domain.UserRepository
+	tokens domain.RefreshTokenRepository
 	hasher PasswordHasher // порт хеширования паролей (реализация — в инфраструктуре)
 }
 
 // NewUserUseCase собирает сценарии работы с пользователями через DI.
-func NewUserUseCase(users UserRepository, tokens TokenRepository, hasher PasswordHasher) *UserUseCaseImpl {
+func NewUserUseCase(users domain.UserRepository, tokens domain.RefreshTokenRepository, hasher PasswordHasher) *UserUseCaseImpl {
 	return &UserUseCaseImpl{users: users, tokens: tokens, hasher: hasher}
 }
 
