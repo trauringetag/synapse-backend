@@ -1,24 +1,31 @@
+# Git и IDE
 .git
-.gitignore
-.env
-.env.*
-!.env.example
-*.md
-LICENSE
-CONTRIBUTING.md
-docker-compose.yml
-docker-compose.override.yml
-Dockerfile
-.idea/
-.vscode/
-.DS_Store
+.vscode
+.idea
 *.swp
 *.swo
-*~
+
+# Бинарные артефакты
+bin/
+.bin/
 *.exe
+*.dll
+*.so
+*.dylib
 *.test
 *.out
-coverage.html
-vendor/
-.bin/
-tmp/
+
+# Кеш и логи
+*.log
+.env
+.env.local
+coverage.out
+cover.html
+
+# OS-мусор
+.DS_Store
+Thumbs.db
+
+# Тестовые данные (если не нужны в образе)
+testdata/
+fixtures/

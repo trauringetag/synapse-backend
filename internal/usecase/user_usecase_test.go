@@ -702,9 +702,10 @@ func TestUserUseCase_AdminUpdate_Success(t *testing.T) {
 	assert.False(t, revoked, "при обновлении без пароля сессии НЕ отзываются")
 }
 
-func TestUserUseCase_AdminUpdate_WithPasswordChange(t *testing.T) {
+func TestUserUseCase_AdminUpdate_WithPasswordChange_RevokesSessions(t *testing.T) {
 	f := newUserFixture()
 	userID := uuid.New()
+
 	var updatedHash *string
 	f.users.UpdateFunc = func(_ context.Context, _ uuid.UUID, _, _, _, passwordHash, _ *string) (*domain.User, error) {
 		updatedHash = passwordHash
@@ -714,49 +715,30 @@ func TestUserUseCase_AdminUpdate_WithPasswordChange(t *testing.T) {
 		}
 		return u, nil
 	}
-	var revokedSessions bool
+
 	var revokedFor uuid.UUID
 	f.tokens.RevokeAllForUserFunc = func(_ context.Context, uid uuid.UUID) error {
-		revokedSessions = true
 		revokedFor = uid
 		return nil
 	}
 
+	// Act
 	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
 		ID:       userID,
 		Password: strPtr("brand-new-password"),
 	})
 
+	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, user)
+
+	// 1. Проверяем, что пароль захеширован
 	require.NotNil(t, updatedHash, "новый хеш пароля должен быть передан в репозиторий")
 	assert.Equal(t, "hash:brand-new-password", *updatedHash)
-	assert.True(t, revokedSessions, "Сессии должны быть отозваны при смене пароля")
-	assert.Equal(t, userID, revokedFor)
-}
 
-func TestUserUseCase_AdminUpdate_PasswordChange_RevokesSessions(t *testing.T) {
-	// Отдельный сценарий из ТЗ: отзыв всех сессий при смене пароля админом.
-	f := newUserFixture()
-	userID := uuid.New()
-	f.users.UpdateFunc = func(_ context.Context, _ uuid.UUID, _, _, _, _, _ *string) (*domain.User, error) {
-		return sampleUser(userID), nil
-	}
-	var revokedSessions bool
-	f.tokens.RevokeAllForUserFunc = func(_ context.Context, uid uuid.UUID) error {
-		revokedSessions = true
-		assert.Equal(t, userID, uid)
-		return nil
-	}
-
-	_, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
-		ID:       userID,
-		Password: strPtr("newpassword123"),
-	})
-
-	require.NoError(t, err)
-	assert.True(t, revokedSessions, "Сессии должны быть отозваны при смене пароля")
-	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
+	// 2. Проверяем, что сессии отозваны
+	assert.Equal(t, userID, revokedFor, "Сессии должны быть отозваны для правильного пользователя")
+	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"), "RevokeAllForUser должен быть вызван ровно один раз")
 }
 
 func TestUserUseCase_AdminUpdate_RevokeFailure_StillSucceeds(t *testing.T) {
