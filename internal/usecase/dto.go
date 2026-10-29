@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
 // ---------- DTO входа (Input) ----------
@@ -121,7 +120,7 @@ type RefreshResult struct {
 
 // SessionResult — результат входа: пользователь и выпущенная пара токенов.
 type SessionResult struct {
-	User *models.User
+	User *domain.User
 	Pair *TokenPair
 }
 
@@ -131,8 +130,8 @@ type SessionResult struct {
 // админская со строгим сравнением токена), вход с защитой от timing-атак,
 // ротация refresh-токенов с детектом replay, выход и выдача CSRF-токена.
 type AuthUseCase interface {
-	Register(ctx context.Context, in RegisterInput) (*models.User, error)
-	RegisterAdmin(ctx context.Context, in RegisterInput) (*models.User, error)
+	Register(ctx context.Context, in RegisterInput) (*domain.User, error)
+	RegisterAdmin(ctx context.Context, in RegisterInput) (*domain.User, error)
 	Login(ctx context.Context, in LoginInput) (*SessionResult, error)
 	// Refresh возвращает результат ротации refresh-токена:
 	//   - Pair != nil               -> успех: установить новые cookie;
@@ -147,13 +146,13 @@ type AuthUseCase interface {
 // фильтрацией, создание, замена/обновление профиля (своего и админские),
 // удаление с защитой собственной учетной записи.
 type UserUseCase interface {
-	GetMe(ctx context.Context, userID uuid.UUID) (*models.User, error)
+	GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 	List(ctx context.Context, in ListUsersInput) (*domain.UserListResult, error)
-	Create(ctx context.Context, in CreateUserInput) (*models.User, error)
-	ReplaceProfile(ctx context.Context, in ReplaceProfileInput) (*models.User, error)
-	UpdateOwnProfile(ctx context.Context, in UpdateOwnProfileInput) (*models.User, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
-	AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*models.User, error)
-	AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*models.User, error)
+	Create(ctx context.Context, in CreateUserInput) (*domain.User, error)
+	ReplaceProfile(ctx context.Context, in ReplaceProfileInput) (*domain.User, error)
+	UpdateOwnProfile(ctx context.Context, in UpdateOwnProfileInput) (*domain.User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*domain.User, error)
+	AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*domain.User, error)
 	Delete(ctx context.Context, in DeleteUserInput) error
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
@@ -132,7 +131,7 @@ func validateRegister(in RegisterInput) (email, first, last string, err error) {
 
 // createUserWithHash — общая часть: хеширование пароля (через порт
 // PasswordHasher) и создание пользователя через репозиторий.
-func (uc *AuthUseCaseImpl) createUserWithHash(ctx context.Context, email, password, role, first, last string) (*models.User, error) {
+func (uc *AuthUseCaseImpl) createUserWithHash(ctx context.Context, email, password, role, first, last string) (*domain.User, error) {
 	hash, err := uc.hasher.Hash(password)
 	if err != nil {
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
@@ -148,17 +147,17 @@ func (uc *AuthUseCaseImpl) createUserWithHash(ctx context.Context, email, passwo
 }
 
 // Register регистрирует обычного пользователя (роль user).
-func (uc *AuthUseCaseImpl) Register(ctx context.Context, in RegisterInput) (*models.User, error) {
+func (uc *AuthUseCaseImpl) Register(ctx context.Context, in RegisterInput) (*domain.User, error) {
 	email, first, last, err := validateRegister(in)
 	if err != nil {
 		return nil, err
 	}
-	return uc.createUserWithHash(ctx, email, in.Password, models.RoleUser, first, last)
+	return uc.createUserWithHash(ctx, email, in.Password, domain.RoleUser, first, last)
 }
 
 // RegisterAdmin регистрирует администратора; дополнительно constant-time
 // сравнением проверяется секретный токен админской регистрации.
-func (uc *AuthUseCaseImpl) RegisterAdmin(ctx context.Context, in RegisterInput) (*models.User, error) {
+func (uc *AuthUseCaseImpl) RegisterAdmin(ctx context.Context, in RegisterInput) (*domain.User, error) {
 	email, first, last, err := validateRegister(in)
 	if err != nil {
 		return nil, err
@@ -168,7 +167,7 @@ func (uc *AuthUseCaseImpl) RegisterAdmin(ctx context.Context, in RegisterInput) 
 	if subtle.ConstantTimeCompare([]byte(provided), []byte(uc.adminToken)) != 1 {
 		return nil, newErr(ErrCodeForbidden, messages.InvalidAdminToken)
 	}
-	return uc.createUserWithHash(ctx, email, in.Password, models.RoleAdmin, first, last)
+	return uc.createUserWithHash(ctx, email, in.Password, domain.RoleAdmin, first, last)
 }
 
 // ---------- Вход ----------
@@ -187,7 +186,7 @@ func (uc *AuthUseCaseImpl) Login(ctx context.Context, in LoginInput) (*SessionRe
 	}
 
 	var isValidUser bool
-	if err == nil && user.Status == models.StatusActive {
+	if err == nil && user.Status == domain.StatusActive {
 		isValidUser = true
 	}
 
@@ -211,8 +210,8 @@ func (uc *AuthUseCaseImpl) Login(ctx context.Context, in LoginInput) (*SessionRe
 
 // issueSession — бизнес-логика выпуска сессии: проверка статуса, генерация
 // пары токенов и сохранение хеша refresh-токена. Cookie устанавливает HTTP-слой.
-func (uc *AuthUseCaseImpl) issueSession(ctx context.Context, user *models.User) (*TokenPair, error) {
-	if user == nil || user.Status != models.StatusActive {
+func (uc *AuthUseCaseImpl) issueSession(ctx context.Context, user *domain.User) (*TokenPair, error) {
+	if user == nil || user.Status != domain.StatusActive {
 		return nil, domain.ErrNotFound
 	}
 	pair, err := uc.issuer.IssuePair(user.ID, user.Email, user.Role)
@@ -252,7 +251,7 @@ func (uc *AuthUseCaseImpl) Refresh(ctx context.Context, in RefreshInput) (*Refre
 	}
 
 	var issued *TokenPair
-	_, err = uc.tokens.Rotate(ctx, HashToken(in.RawRefreshToken), id, func(user *models.User) (string, time.Time, error) {
+	_, err = uc.tokens.Rotate(ctx, HashToken(in.RawRefreshToken), id, func(user *domain.User) (string, time.Time, error) {
 		var issueErr error
 		issued, issueErr = uc.issuer.IssuePair(user.ID, user.Email, user.Role)
 		if issueErr != nil {

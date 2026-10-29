@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
 type UserRepository struct {
@@ -25,8 +24,8 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
 }
 
-func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error) {
-	var u models.User
+func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*domain.User, error) {
+	var u domain.User
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role, first_name, last_name)
 		VALUES ($1, $2, $3, $4, $5)
@@ -43,11 +42,11 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, role, 
 	return &u, nil
 }
 
-func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE id = $1`, id)
 }
 
-func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
+func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return r.scanOne(ctx, `SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at FROM users WHERE email = $1`, email)
 }
 
@@ -76,9 +75,9 @@ func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListR
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]models.User, 0)
+	items := make([]domain.User, 0)
 	for rows.Next() {
-		var u models.User
+		var u domain.User
 		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -94,8 +93,8 @@ func (r *UserRepository) List(ctx context.Context, f UserListFilter) (*UserListR
 	return &UserListResult{Items: items, Page: f.Page, Limit: f.Limit, Total: total, TotalPages: pages}, nil
 }
 
-func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*models.User, error) {
-	var u models.User
+func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*domain.User, error) {
+	var u domain.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users 
 		SET 
@@ -124,8 +123,8 @@ func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email
 	return &u, nil
 }
 
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*models.User, error) {
-	var u models.User
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	var u domain.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = COALESCE($2, email),
@@ -156,8 +155,8 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 	return &u, nil
 }
 
-func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*models.User, error) {
-	var u models.User
+func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	var u domain.User
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users SET
 			email = $2,
@@ -184,7 +183,7 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 }
 
 func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1 AND role <> $2`, id, models.RoleAdmin)
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1 AND role <> $2`, id, domain.RoleAdmin)
 	if err != nil {
 		return err
 	}
@@ -200,14 +199,14 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	if role == models.RoleAdmin {
+	if role == domain.RoleAdmin {
 		return domain.ErrProtected
 	}
 	return domain.ErrNotFound
 }
 
-func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*models.User, error) {
-	var u models.User
+func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*domain.User, error) {
+	var u domain.User
 	err := r.pool.QueryRow(ctx, q, arg).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)

@@ -18,7 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/domain"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
@@ -114,18 +114,18 @@ func TestRegister_Success(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
-	var u models.User
+	var u domain.User
 	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
 		t.Fatal(err)
 	}
 	if u.Email != "newuser@example.com" {
 		t.Errorf("Email не нормализован: %q", u.Email)
 	}
-	if u.Role != models.RoleUser {
-		t.Errorf("Роль по умолчанию = %q, ожидается: %q", u.Role, models.RoleUser)
+	if u.Role != domain.RoleUser {
+		t.Errorf("Роль по умолчанию = %q, ожидается: %q", u.Role, domain.RoleUser)
 	}
-	if u.Status != models.StatusActive {
-		t.Errorf("Статус нового пользователя = %q, ожидается: %q", u.Status, models.StatusActive)
+	if u.Status != domain.StatusActive {
+		t.Errorf("Статус нового пользователя = %q, ожидается: %q", u.Status, domain.StatusActive)
 	}
 	// Утечка данных: хеш пароля не должен попадать в JSON (json:"-").
 	if strings.Contains(rec.Body.String(), "password") {
@@ -252,10 +252,10 @@ func TestRegisterAdmin_Success(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
-	var u models.User
+	var u domain.User
 	_ = json.Unmarshal(rec.Body.Bytes(), &u)
-	if u.Role != models.RoleAdmin {
-		t.Errorf("Роль = %q, ожидается: %q", u.Role, models.RoleAdmin)
+	if u.Role != domain.RoleAdmin {
+		t.Errorf("Роль = %q, ожидается: %q", u.Role, domain.RoleAdmin)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestRegisterAdmin_ValidationRunsFirst(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // seedUser создает пользователя с хешем bcrypt.MinCost (быстро) для большинства тестов.
-func seedUser(t *testing.T, store *mockStore, email, password, role string) *models.User {
+func seedUser(t *testing.T, store *mockStore, email, password, role string) *domain.User {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	if err != nil {
@@ -339,7 +339,7 @@ func TestLogin_Success(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 
 	rec := httptest.NewRecorder()
 	h.Login(rec, postJSON("/api/v1/login", map[string]string{
@@ -406,9 +406,9 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
-	inactive := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
-	inactive.Status = models.StatusInactive
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+	inactive := seedUser(t, store, "blocked@example.com", "StrongPass123", domain.RoleUser)
+	inactive.Status = domain.StatusInactive
 
 	tests := []struct {
 		name     string
@@ -480,9 +480,9 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.seedUser(&models.User{
+	store.seedUser(&domain.User{
 		ID: uuid.New(), Email: "exists@example.com", PasswordHash: string(realHash),
-		Role: models.RoleUser, Status: models.StatusActive, FirstName: "E", LastName: "X",
+		Role: domain.RoleUser, Status: domain.StatusActive, FirstName: "E", LastName: "X",
 	})
 
 	// measure выполняет N итераций и возвращает среднее время для статистической устойчивости.
@@ -583,7 +583,7 @@ func TestRefresh_Rotation(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 
 	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 	oldRefresh := cm[auth.RefreshCookie]
@@ -622,7 +622,7 @@ func TestRefresh_ReplayAttack(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+	u := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 
 	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 	oldRefresh := cm[auth.RefreshCookie]
@@ -693,7 +693,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 	t.Run("Access-токен вместо refresh (проверка audience)", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+		seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 		cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 
 		rec := httptest.NewRecorder()
@@ -708,7 +708,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 		expCfg.RefreshTTL = -time.Hour // токен родился уже просроченным
 		store := newMockStore()
 		h := NewAuthHandler(expCfg, newAuthUC(expCfg, store))
-		u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 		pair, err := auth.IssuePair(expCfg, u.ID, u.Email, u.Role)
 		if err != nil {
 			t.Fatal(err)
@@ -724,7 +724,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 	t.Run("Валидный JWT, но неизвестный хранилищу токен", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-		u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 		pair, _ := auth.IssuePair(cfg, u.ID, u.Email, u.Role) // в store не сохраняли
 
 		rec := httptest.NewRecorder()
@@ -737,10 +737,10 @@ func TestRefresh_RejectCases(t *testing.T) {
 	t.Run("Refresh для заблокированного пользователя отзывает его сессии", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-		u := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "blocked@example.com", "StrongPass123", domain.RoleUser)
 		pair, _ := auth.IssuePair(cfg, u.ID, u.Email, u.Role)
 		_ = store.Store(nilCtx(), u.ID, auth.HashToken(pair.RefreshToken), pair.RefreshExp)
-		u.Status = models.StatusInactive // блокировка админом после выдачи токена
+		u.Status = domain.StatusInactive // блокировка админом после выдачи токена
 
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(pair.RefreshToken))
@@ -765,7 +765,7 @@ func TestLogout(t *testing.T) {
 	t.Run("Выход с активным refresh-токеном", func(t *testing.T) {
 		store := newMockStore()
 		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
-		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
+		seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 		cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 		refresh := cm[auth.RefreshCookie]
 

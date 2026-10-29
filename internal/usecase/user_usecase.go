@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
@@ -34,7 +33,7 @@ var _ UserUseCase = (*UserUseCaseImpl)(nil)
 // ---------- Чтение ----------
 
 // GetMe возвращает профиль аутентифицированного пользователя.
-func (uc *UserUseCaseImpl) GetMe(ctx context.Context, userID uuid.UUID) (*models.User, error) {
+func (uc *UserUseCaseImpl) GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
 	user, err := uc.users.GetByID(ctx, userID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
@@ -46,7 +45,7 @@ func (uc *UserUseCaseImpl) GetMe(ctx context.Context, userID uuid.UUID) (*models
 }
 
 // GetByID возвращает пользователя по идентификатору (админский сценарий).
-func (uc *UserUseCaseImpl) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+func (uc *UserUseCaseImpl) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	user, err := uc.users.GetByID(ctx, id)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
@@ -90,7 +89,7 @@ func (uc *UserUseCaseImpl) List(ctx context.Context, in ListUsersInput) (*domain
 
 // Create создает пользователя с указанной ролью (по умолчанию — user).
 // Пароль хешируется через внедренный порт PasswordHasher; невалидная роль отклоняется.
-func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*models.User, error) {
+func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*domain.User, error) {
 	email := normalizeEmail(in.Email)
 	first := normalizeName(in.FirstName)
 	last := normalizeName(in.LastName)
@@ -105,7 +104,7 @@ func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*mod
 		})
 	}
 	if role == "" {
-		role = models.RoleUser
+		role = domain.RoleUser
 	}
 	if !validRole(role) {
 		return nil, validationErr(messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
@@ -128,7 +127,7 @@ func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*mod
 // ---------- Обновление собственного профиля ----------
 
 // ReplaceProfile полностью заменяет профиль самого пользователя (PUT /me).
-func (uc *UserUseCaseImpl) ReplaceProfile(ctx context.Context, in ReplaceProfileInput) (*models.User, error) {
+func (uc *UserUseCaseImpl) ReplaceProfile(ctx context.Context, in ReplaceProfileInput) (*domain.User, error) {
 	email := normalizeEmail(in.Email)
 	first := normalizeName(in.FirstName)
 	last := normalizeName(in.LastName)
@@ -155,7 +154,7 @@ func (uc *UserUseCaseImpl) ReplaceProfile(ctx context.Context, in ReplaceProfile
 
 // UpdateOwnProfile частично обновляет собственный профиль (PATCH /me).
 // Роль и статус здесь недоступны — пользователь не может менять их себе.
-func (uc *UserUseCaseImpl) UpdateOwnProfile(ctx context.Context, in UpdateOwnProfileInput) (*models.User, error) {
+func (uc *UserUseCaseImpl) UpdateOwnProfile(ctx context.Context, in UpdateOwnProfileInput) (*domain.User, error) {
 	if in.Email == nil && in.FirstName == nil && in.LastName == nil {
 		return nil, validationErr(messages.EmptyUpdateData, map[string][]string{"body": {messages.SpecifyAtLeastOneField}})
 	}
@@ -199,7 +198,7 @@ func (uc *UserUseCaseImpl) UpdateOwnProfile(ctx context.Context, in UpdateOwnPro
 
 // AdminReplace полностью заменяет карточку пользователя (PUT /users/{id}).
 // Поле role намеренно не принимается: роль через PUT не меняется.
-func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*models.User, error) {
+func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*domain.User, error) {
 	email := normalizeEmail(in.Email)
 	first := normalizeName(in.FirstName)
 	last := normalizeName(in.LastName)
@@ -244,7 +243,7 @@ func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUser
 // AdminUpdate частично обновляет карточку пользователя админом (PATCH /users/{id}).
 // При смене пароля хеш пересоздается, а все активные сессии пользователя
 // отзываются (требование безопасности).
-func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*models.User, error) {
+func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*domain.User, error) {
 	var email, first, last, passwordHash, status *string
 
 	if in.Email != nil {

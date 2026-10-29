@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
@@ -38,7 +37,7 @@ func newUserHandler() (*UserHandler, *mockStore) {
 }
 
 // asPrincipal превращает пользователя в Principal из middleware.
-func asPrincipal(u *models.User) *middleware.Principal {
+func asPrincipal(u *domain.User) *middleware.Principal {
 	return &middleware.Principal{ID: u.ID, Email: u.Email, Role: u.Role}
 }
 
@@ -115,7 +114,7 @@ func assertDetailsExact(t *testing.T, rec *httptest.ResponseRecorder, fields ...
 func TestMe(t *testing.T) {
 	t.Run("Успех: пользователь видит собственный профиль без хеша пароля", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil), asPrincipal(u))
 		rec := httptest.NewRecorder()
@@ -124,7 +123,7 @@ func TestMe(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
-		var got models.User
+		var got domain.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
 		if got.ID != u.ID || got.Email != u.Email {
 			t.Errorf("Получен чужой профиль: %+v", got)
@@ -145,7 +144,7 @@ func TestMe(t *testing.T) {
 
 	t.Run("Пользователь удален из БД, но токен живой -> 404", func(t *testing.T) {
 		h, _ := newUserHandler()
-		ghost := &middleware.Principal{ID: uuid.New(), Email: "ghost@example.com", Role: models.RoleUser}
+		ghost := &middleware.Principal{ID: uuid.New(), Email: "ghost@example.com", Role: domain.RoleUser}
 		req := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil), ghost)
 		rec := httptest.NewRecorder()
 		h.Me(rec, req)
@@ -159,7 +158,7 @@ func TestMe(t *testing.T) {
 func TestPutMe(t *testing.T) {
 	t.Run("Успешная замена email, имени и фамилии", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "old@example.com", "StrongPass123", domain.RoleUser)
 
 		body := map[string]string{"email": "new@example.com", "first_name": "New", "last_name": "Name"}
 		req := withUser(postJSON("/api/v1/users/me", body), asPrincipal(u))
@@ -177,7 +176,7 @@ func TestPutMe(t *testing.T) {
 
 	t.Run("Валидация: битый email и пустые имена -> 400 с details", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		cases := []struct {
 			field string
@@ -200,8 +199,8 @@ func TestPutMe(t *testing.T) {
 
 	t.Run("Конфликт: чужой занятый email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
-		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
+		seedUser(t, store, "taken@example.com", "StrongPass123", domain.RoleUser)
 
 		body := map[string]string{"email": "taken@example.com", "first_name": "A", "last_name": "B"}
 		req := withUser(postJSON("/api/v1/users/me", body), asPrincipal(u))
@@ -216,7 +215,7 @@ func TestPutMe(t *testing.T) {
 	// повысить себе роль или деактивировать себя через /users/me.
 	t.Run("Атака: поля role и status отклоняются на уровне декодирования", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		for _, extra := range []string{`"role":"admin"`, `"status":"inactive"`} {
 			raw := `{"email":"me@example.com","first_name":"A","last_name":"B",` + extra + `}`
@@ -230,7 +229,7 @@ func TestPutMe(t *testing.T) {
 				t.Fatalf("Статус = %d, ожидается: 400 для поля %s", rec.Code, extra)
 			}
 			got, _ := store.GetByID(nilCtx(), u.ID)
-			if got.Role != models.RoleUser || got.Status != models.StatusActive {
+			if got.Role != domain.RoleUser || got.Status != domain.StatusActive {
 				t.Errorf("Роль/статус изменились: %+v", got)
 			}
 		}
@@ -241,7 +240,7 @@ func TestPutMe(t *testing.T) {
 func TestPatchMe(t *testing.T) {
 	t.Run("Успех: обновление только имени", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(postJSON("/api/v1/users/me", map[string]string{"first_name": "Only"}), asPrincipal(u))
 		rec := httptest.NewRecorder()
@@ -258,7 +257,7 @@ func TestPatchMe(t *testing.T) {
 
 	t.Run("Пустое тело -> 400 с подсказкой", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(postJSON("/api/v1/users/me", map[string]string{}), asPrincipal(u))
 		rec := httptest.NewRecorder()
@@ -271,7 +270,7 @@ func TestPatchMe(t *testing.T) {
 
 	t.Run("Невалидный email в PATCH -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(postJSON("/api/v1/users/me", map[string]string{"email": "bad"}), asPrincipal(u))
 		rec := httptest.NewRecorder()
@@ -284,8 +283,8 @@ func TestPatchMe(t *testing.T) {
 
 	t.Run("Конфликт email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "me@example.com", "StrongPass123", models.RoleUser)
-		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "me@example.com", "StrongPass123", domain.RoleUser)
+		seedUser(t, store, "taken@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(postJSON("/api/v1/users/me", map[string]string{"email": "taken@example.com"}), asPrincipal(u))
 		rec := httptest.NewRecorder()
@@ -305,9 +304,9 @@ func TestList(t *testing.T) {
 	// seedList наполняет хранилище детерминированным набором пользователей.
 	seedList := func(store *mockStore, n int) {
 		for i := 0; i < n; i++ {
-			role := models.RoleUser
+			role := domain.RoleUser
 			if i%5 == 0 {
-				role = models.RoleAdmin
+				role = domain.RoleAdmin
 			}
 			seedUser(t, store, "user"+string(rune('a'+i))+"@example.com", "StrongPass123", role)
 		}
@@ -410,7 +409,7 @@ func TestList(t *testing.T) {
 		var res domain.UserListResult
 		_ = json.Unmarshal(rec.Body.Bytes(), &res)
 		for _, it := range res.Items {
-			if it.Role != models.RoleAdmin {
+			if it.Role != domain.RoleAdmin {
 				t.Errorf("Фильтр role сломан: %+v", it)
 			}
 		}
@@ -428,9 +427,9 @@ func TestList(t *testing.T) {
 
 	t.Run("Фильтр status: валидный и невалидный", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "active@example.com", "StrongPass123", models.RoleUser)
-		blocked := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
-		blocked.Status = models.StatusInactive
+		u := seedUser(t, store, "active@example.com", "StrongPass123", domain.RoleUser)
+		blocked := seedUser(t, store, "blocked@example.com", "StrongPass123", domain.RoleUser)
+		blocked.Status = domain.StatusInactive
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?status=inactive", nil))
@@ -451,8 +450,8 @@ func TestList(t *testing.T) {
 
 	t.Run("Поиск по подстроке и ограничение длины поиска", func(t *testing.T) {
 		h, store := newUserHandler()
-		seedUser(t, store, "findme@example.com", "StrongPass123", models.RoleUser)
-		seedUser(t, store, "other@example.com", "StrongPass123", models.RoleUser)
+		seedUser(t, store, "findme@example.com", "StrongPass123", domain.RoleUser)
+		seedUser(t, store, "other@example.com", "StrongPass123", domain.RoleUser)
 
 		rec := httptest.NewRecorder()
 		h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users?search=findme", nil))
@@ -483,9 +482,9 @@ func TestCreate(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 		}
-		var u models.User
+		var u domain.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &u)
-		if u.Role != models.RoleUser {
+		if u.Role != domain.RoleUser {
 			t.Errorf("Роль по умолчанию = %q, ожидается: user", u.Role)
 		}
 
@@ -498,7 +497,7 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &u)
-		if u.Role != models.RoleAdmin {
+		if u.Role != domain.RoleAdmin {
 			t.Errorf("Явная роль admin не применена: %q", u.Role)
 		}
 		_ = store
@@ -531,7 +530,7 @@ func TestCreate(t *testing.T) {
 
 	t.Run("Дубликат email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
-		seedUser(t, store, "dup@example.com", "StrongPass123", models.RoleUser)
+		seedUser(t, store, "dup@example.com", "StrongPass123", domain.RoleUser)
 
 		rec := httptest.NewRecorder()
 		h.Create(rec, postJSON("/api/v1/users", map[string]string{
@@ -549,7 +548,7 @@ func TestCreate(t *testing.T) {
 func TestGetByID(t *testing.T) {
 	t.Run("Успех", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "one@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "one@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withChiID(httptest.NewRequest(http.MethodGet, "/api/v1/users/"+u.ID.String(), nil), u.ID.String())
 		rec := httptest.NewRecorder()
@@ -594,7 +593,7 @@ func TestPut(t *testing.T) {
 
 	t.Run("Успешная полная замена, включая статус", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "old@example.com", "StrongPass123", domain.RoleUser)
 
 		body := fullBody()
 		body["status"] = "inactive"
@@ -606,14 +605,14 @@ func TestPut(t *testing.T) {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
-		if got.Email != "put@example.com" || got.Status != models.StatusInactive {
+		if got.Email != "put@example.com" || got.Status != domain.StatusInactive {
 			t.Errorf("Замена не применена: %+v", got)
 		}
 	})
 
 	t.Run("Status обязателен: отсутствие -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "old@example.com", "StrongPass123", domain.RoleUser)
 		body := fullBody()
 		delete(body, "status")
 
@@ -628,7 +627,7 @@ func TestPut(t *testing.T) {
 
 	t.Run("Набор ошибок валидации -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "old@example.com", "StrongPass123", domain.RoleUser)
 
 		cases := []struct {
 			field  string
@@ -655,7 +654,7 @@ func TestPut(t *testing.T) {
 
 	t.Run("Атака: поле role в PUT игнорируется (роль через PUT не меняется)", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "old@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "old@example.com", "StrongPass123", domain.RoleUser)
 
 		raw := `{"email":"put@example.com","password":"StrongPass123","first_name":"P",` +
 			`"last_name":"U","status":"active","role":"admin"}`
@@ -669,15 +668,15 @@ func TestPut(t *testing.T) {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
-		if got.Role != models.RoleUser {
+		if got.Role != domain.RoleUser {
 			t.Errorf("Роль изменилась через PUT: %q", got.Role)
 		}
 	})
 
 	t.Run("Несуществующий пользователь -> 404, конфликт email -> 409", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "one@example.com", "StrongPass123", models.RoleUser)
-		seedUser(t, store, "taken@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "one@example.com", "StrongPass123", domain.RoleUser)
+		seedUser(t, store, "taken@example.com", "StrongPass123", domain.RoleUser)
 
 		missing := uuid.New().String()
 		req := withChiID(postJSON("/api/v1/users/"+missing, fullBody()), missing)
@@ -702,7 +701,7 @@ func TestPut(t *testing.T) {
 func TestPatch(t *testing.T) {
 	t.Run("Успех: точечная смена статуса", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "p@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withChiID(postJSON("/api/v1/users/"+u.ID.String(), map[string]string{"status": "inactive"}), u.ID.String())
 		rec := httptest.NewRecorder()
@@ -712,14 +711,14 @@ func TestPatch(t *testing.T) {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
-		if got.Status != models.StatusInactive {
+		if got.Status != domain.StatusInactive {
 			t.Errorf("Статус не обновлен: %+v", got)
 		}
 	})
 
 	t.Run("Смена пароля отзывает ВСЕ сессии пользователя", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "p@example.com", "OldPass12345", models.RoleUser)
+		u := seedUser(t, store, "p@example.com", "OldPass12345", domain.RoleUser)
 
 		// Имитируем две активные сессии (два refresh-токена в хранилище).
 		for i := 0; i < 2; i++ {
@@ -750,7 +749,7 @@ func TestPatch(t *testing.T) {
 
 	t.Run("Валидация: невалидные status и password -> 400", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "p@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withChiID(postJSON("/api/v1/users/"+u.ID.String(), map[string]string{"status": "banned"}), u.ID.String())
 		rec := httptest.NewRecorder()
@@ -771,7 +770,7 @@ func TestPatch(t *testing.T) {
 
 	t.Run("Атака: смена роли через PATCH отклоняется (Unknown field)", func(t *testing.T) {
 		h, store := newUserHandler()
-		u := seedUser(t, store, "p@example.com", "StrongPass123", models.RoleUser)
+		u := seedUser(t, store, "p@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withChiID(postJSON("/api/v1/users/"+u.ID.String(), map[string]string{"role": "admin"}), u.ID.String())
 		rec := httptest.NewRecorder()
@@ -780,7 +779,7 @@ func TestPatch(t *testing.T) {
 			t.Fatalf("Статус = %d, ожидается: 400", rec.Code)
 		}
 		got, _ := store.GetByID(nilCtx(), u.ID)
-		if got.Role != models.RoleUser {
+		if got.Role != domain.RoleUser {
 			t.Errorf("Роль изменилась через PATCH: %q", got.Role)
 		}
 	})
@@ -801,8 +800,8 @@ func TestPatch(t *testing.T) {
 func TestDelete(t *testing.T) {
 	t.Run("Успех: удаление обычного пользователя -> 204", func(t *testing.T) {
 		h, store := newUserHandler()
-		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
-		victim := seedUser(t, store, "victim@example.com", "StrongPass123", models.RoleUser)
+		admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
+		victim := seedUser(t, store, "victim@example.com", "StrongPass123", domain.RoleUser)
 
 		req := withUser(withChiID(httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+victim.ID.String(), nil), victim.ID.String()), asPrincipal(admin))
 		rec := httptest.NewRecorder()
@@ -818,7 +817,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("Атака/защита: администратор не может удалить сам себя -> 403", func(t *testing.T) {
 		h, store := newUserHandler()
-		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
+		admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
 
 		req := withUser(withChiID(httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+admin.ID.String(), nil), admin.ID.String()), asPrincipal(admin))
 		rec := httptest.NewRecorder()
@@ -832,8 +831,8 @@ func TestDelete(t *testing.T) {
 
 	t.Run("Защита: учетную запись администратора удалить нельзя -> 403", func(t *testing.T) {
 		h, store := newUserHandler()
-		admin1 := seedUser(t, store, "admin1@example.com", "StrongPass123", models.RoleAdmin)
-		admin2 := seedUser(t, store, "admin2@example.com", "StrongPass123", models.RoleAdmin)
+		admin1 := seedUser(t, store, "admin1@example.com", "StrongPass123", domain.RoleAdmin)
+		admin2 := seedUser(t, store, "admin2@example.com", "StrongPass123", domain.RoleAdmin)
 
 		req := withUser(withChiID(httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+admin2.ID.String(), nil), admin2.ID.String()), asPrincipal(admin1))
 		rec := httptest.NewRecorder()
@@ -847,7 +846,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("Несуществующий пользователь -> 404, битый UUID -> 400, без Principal -> 401", func(t *testing.T) {
 		h, store := newUserHandler()
-		admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
+		admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
 
 		missing := uuid.New().String()
 		req := withUser(withChiID(httptest.NewRequest(http.MethodDelete, "/api/v1/users/"+missing, nil), missing), asPrincipal(admin))
@@ -884,8 +883,8 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 	store := newMockStore()
 	h := NewUserHandler(newUserUC(store))
 
-	user := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
-	admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
+	user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+	admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
 	userPair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
 	adminPair, _ := auth.IssuePair(cfg, admin.ID, admin.Email, admin.Role)
 
@@ -928,8 +927,8 @@ func TestRBAC_IDOR(t *testing.T) {
 	store := newMockStore()
 	h := NewUserHandler(newUserUC(store))
 
-	user := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
-	victim := seedUser(t, store, "victim@example.com", "StrongPass123", models.RoleUser)
+	user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+	victim := seedUser(t, store, "victim@example.com", "StrongPass123", domain.RoleUser)
 	userPair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
 
 	t.Run("Чужая карточка через админский маршрут -> 403", func(t *testing.T) {
@@ -952,7 +951,7 @@ func TestRBAC_IDOR(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
-		var got models.User
+		var got domain.User
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
 		if got.ID != user.ID {
 			t.Error("Пользователь получил чужой профиль")
@@ -967,7 +966,7 @@ func TestAdminFullFlow(t *testing.T) {
 	store := newMockStore()
 	authH := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	userH := NewUserHandler(newUserUC(store))
-	admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
+	admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
 	adminPair, _ := auth.IssuePair(cfg, admin.ID, admin.Email, admin.Role)
 
 	withAdmin := func(req *http.Request) *http.Request {
@@ -994,7 +993,7 @@ func TestAdminFullFlow(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Create: статус = %d; body = %s", rec.Code, rec.Body.String())
 	}
-	var created models.User
+	var created domain.User
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
 
 	// 3. Блокировка пользователя (PATCH status=inactive).
@@ -1005,7 +1004,7 @@ func TestAdminFullFlow(t *testing.T) {
 		t.Fatalf("PATCH: статус = %d; body = %s", rec.Code, rec.Body.String())
 	}
 	blocked, _ := store.GetByID(nilCtx(), created.ID)
-	if blocked.Status != models.StatusInactive {
+	if blocked.Status != domain.StatusInactive {
 		t.Errorf("Статус после блокировки = %q", blocked.Status)
 	}
 

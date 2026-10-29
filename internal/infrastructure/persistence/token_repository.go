@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
 type TokenRepository struct {
@@ -34,8 +33,8 @@ func (r *TokenRepository) Store(ctx context.Context, userID uuid.UUID, tokenHash
 	return err
 }
 
-func (r *TokenRepository) GetActive(ctx context.Context, tokenHash string) (*models.RefreshToken, error) {
-	var t models.RefreshToken
+func (r *TokenRepository) GetActive(ctx context.Context, tokenHash string) (*domain.RefreshToken, error) {
+	var t domain.RefreshToken
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, user_id, token_hash, expires_at, revoked, created_at
 		FROM refresh_tokens
@@ -54,8 +53,8 @@ func (r *TokenRepository) Rotate(
 	ctx context.Context,
 	oldHash string,
 	expectedUserID uuid.UUID,
-	createSuccessor func(*models.User) (string, time.Time, error),
-) (*models.User, error) {
+	createSuccessor func(*domain.User) (string, time.Time, error),
+) (*domain.User, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Начать обновление ротации: %w", err)
@@ -88,13 +87,13 @@ func (r *TokenRepository) Rotate(
 		return nil, domain.ErrNotFound
 	}
 
-	var user models.User
+	var user domain.User
 	err = tx.QueryRow(ctx, `
         SELECT id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
         FROM users WHERE id = $1 FOR UPDATE
     `, userID).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.Status,
 		&user.FirstName, &user.LastName, &user.CreatedAt, &user.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && user.Status != models.StatusActive) {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && user.Status != domain.StatusActive) {
 		if _, revokeErr := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE`, userID); revokeErr != nil {
 			return nil, fmt.Errorf("Аннулировать refresh-токены неактивного пользователя: %w", revokeErr)
 		}

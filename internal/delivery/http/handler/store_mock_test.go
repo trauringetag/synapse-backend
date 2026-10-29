@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
@@ -19,21 +18,21 @@ import (
 // (регистрация → login → refresh → replay-атака → logout) без PostgreSQL.
 type mockStore struct {
 	mu           sync.Mutex
-	usersByID    map[uuid.UUID]*models.User
-	usersByEmail map[string]*models.User
-	tokens       map[string]*models.RefreshToken // hash refresh-токена -> запись
+	usersByID    map[uuid.UUID]*domain.User
+	usersByEmail map[string]*domain.User
+	tokens       map[string]*domain.RefreshToken // hash refresh-токена -> запись
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		usersByID:    map[uuid.UUID]*models.User{},
-		usersByEmail: map[string]*models.User{},
-		tokens:       map[string]*models.RefreshToken{},
+		usersByID:    map[uuid.UUID]*domain.User{},
+		usersByEmail: map[string]*domain.User{},
+		tokens:       map[string]*domain.RefreshToken{},
 	}
 }
 
 // seedUser добавляет пользователя напрямую (например, с готовым bcrypt-хешем).
-func (s *mockStore) seedUser(u *models.User) {
+func (s *mockStore) seedUser(u *domain.User) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usersByID[u.ID] = u
@@ -43,15 +42,15 @@ func (s *mockStore) seedUser(u *models.User) {
 // ------------------------- интерфейс UserStore -------------------------
 
 // Create дублирует ограничение UNIQUE(email) через domain.ErrConflict.
-func (s *mockStore) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error) {
+func (s *mockStore) Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.usersByEmail[email]; ok {
 		return nil, domain.ErrConflict
 	}
-	u := &models.User{
+	u := &domain.User{
 		ID: uuid.New(), Email: email, PasswordHash: passwordHash, Role: role,
-		Status: models.StatusActive, FirstName: firstName, LastName: lastName,
+		Status: domain.StatusActive, FirstName: firstName, LastName: lastName,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	s.usersByID[u.ID] = u
@@ -59,7 +58,7 @@ func (s *mockStore) Create(ctx context.Context, email, passwordHash, role, first
 	return u, nil
 }
 
-func (s *mockStore) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+func (s *mockStore) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if u, ok := s.usersByID[id]; ok {
@@ -68,7 +67,7 @@ func (s *mockStore) GetByID(ctx context.Context, id uuid.UUID) (*models.User, er
 	return nil, domain.ErrNotFound
 }
 
-func (s *mockStore) GetByEmail(ctx context.Context, email string) (*models.User, error) {
+func (s *mockStore) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if u, ok := s.usersByEmail[email]; ok {
@@ -87,7 +86,7 @@ func (s *mockStore) List(ctx context.Context, f domain.UserListFilter) (*domain.
 	if f.Limit < 1 {
 		f.Limit = 10
 	}
-	filtered := make([]models.User, 0, len(s.usersByID))
+	filtered := make([]domain.User, 0, len(s.usersByID))
 	for _, u := range s.usersByID {
 		if f.Role != "" && u.Role != f.Role {
 			continue
@@ -117,7 +116,7 @@ func (s *mockStore) List(ctx context.Context, f domain.UserListFilter) (*domain.
 	return &domain.UserListResult{Items: filtered[start:end], Page: f.Page, Limit: f.Limit, Total: total, TotalPages: totalPages}, nil
 }
 
-func (s *mockStore) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*models.User, error) {
+func (s *mockStore) ReplaceProfile(ctx context.Context, id uuid.UUID, email, firstName, lastName string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
@@ -134,7 +133,7 @@ func (s *mockStore) ReplaceProfile(ctx context.Context, id uuid.UUID, email, fir
 	return u, nil
 }
 
-func (s *mockStore) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*models.User, error) {
+func (s *mockStore) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
@@ -165,7 +164,7 @@ func (s *mockStore) Update(ctx context.Context, id uuid.UUID, email, firstName, 
 	return u, nil
 }
 
-func (s *mockStore) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*models.User, error) {
+func (s *mockStore) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.usersByID[id]
@@ -191,7 +190,7 @@ func (s *mockStore) Delete(ctx context.Context, id uuid.UUID) error {
 	if !ok {
 		return domain.ErrNotFound
 	}
-	if u.Role == models.RoleAdmin {
+	if u.Role == domain.RoleAdmin {
 		return domain.ErrProtected
 	}
 	delete(s.usersByID, id)
@@ -204,14 +203,14 @@ func (s *mockStore) Delete(ctx context.Context, id uuid.UUID) error {
 func (s *mockStore) Store(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tokens[tokenHash] = &models.RefreshToken{
+	s.tokens[tokenHash] = &domain.RefreshToken{
 		ID: uuid.New(), UserID: userID, TokenHash: tokenHash,
 		ExpiresAt: expiresAt, Revoked: false, CreatedAt: time.Now(),
 	}
 	return nil
 }
 
-func (s *mockStore) GetActive(ctx context.Context, tokenHash string) (*models.RefreshToken, error) {
+func (s *mockStore) GetActive(ctx context.Context, tokenHash string) (*domain.RefreshToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tokens[tokenHash]
@@ -223,7 +222,7 @@ func (s *mockStore) GetActive(ctx context.Context, tokenHash string) (*models.Re
 
 // Rotate воспроизводит транзакционную ротацию: старый токен гасится, создается наследник.
 // Повторное использование ОТЗЫВАННОГО токена -> ErrRefreshTokenReplay (детект replay-атаки).
-func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID uuid.UUID, createSuccessor func(*models.User) (string, time.Time, error)) (*models.User, error) {
+func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID uuid.UUID, createSuccessor func(*domain.User) (string, time.Time, error)) (*domain.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tokens[oldHash]
@@ -243,7 +242,7 @@ func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID u
 	if !ok {
 		return nil, domain.ErrNotFound
 	}
-	if u.Status != models.StatusActive {
+	if u.Status != domain.StatusActive {
 		// как в БД: гасим все токены неактивного пользователя
 		for _, tt := range s.tokens {
 			if tt.UserID == u.ID {
@@ -257,7 +256,7 @@ func (s *mockStore) Rotate(ctx context.Context, oldHash string, expectedUserID u
 		return nil, err
 	}
 	t.Revoked = true
-	s.tokens[newHash] = &models.RefreshToken{
+	s.tokens[newHash] = &domain.RefreshToken{
 		ID: uuid.New(), UserID: u.ID, TokenHash: newHash,
 		ExpiresAt: expiresAt, Revoked: false, CreatedAt: time.Now(),
 	}

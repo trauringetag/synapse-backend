@@ -3,7 +3,7 @@ package usecase
 import (
 	"strings"
 
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/domain"
 )
 
 // Нормализация и валидация входных данных. Это бизнес-правила, а не детали
@@ -24,8 +24,8 @@ func validPassword(p string) bool {
 
 func validFirstName(n string) bool { return n != "" && len(n) <= 255 }
 func validLastName(n string) bool  { return n != "" && len(n) <= 255 }
-func validRole(r string) bool      { return r == models.RoleUser || r == models.RoleAdmin }
-func validStatus(s string) bool    { return s == models.StatusActive || s == models.StatusInactive }
+func validRole(r string) bool      { return r == domain.RoleUser || r == domain.RoleAdmin }
+func validStatus(s string) bool    { return s == domain.StatusActive || s == domain.StatusInactive }
 
 // addDetail добавляет сообщение об ошибке для поля в карту деталей.
 func addDetail(details map[string][]string, field, msg string) {

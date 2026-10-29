@@ -14,22 +14,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 )
 
 // mockUserRepository создает моковое хранилище пользователей для тестов
 type mockUserLookup struct {
-	users map[uuid.UUID]*models.User
+	users map[uuid.UUID]*domain.User
 	err   error // позволяет эмулировать недоступность БД
 }
 
 func newMockUserLookup() *mockUserLookup {
-	return &mockUserLookup{users: map[uuid.UUID]*models.User{}}
+	return &mockUserLookup{users: map[uuid.UUID]*domain.User{}}
 }
 
-func (m *mockUserLookup) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+func (m *mockUserLookup) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -629,13 +628,13 @@ func TestAuthenticate(t *testing.T) {
 	newActiveUser := func() (uuid.UUID, *mockUserLookup) {
 		id := uuid.New()
 		m := newMockUserLookup()
-		m.users[id] = &models.User{ID: id, Email: "user@example.com", Role: models.RoleUser, Status: models.StatusActive}
+		m.users[id] = &domain.User{ID: id, Email: "user@example.com", Role: domain.RoleUser, Status: domain.StatusActive}
 		return id, m
 	}
 
 	t.Run("Успех: валидный access-токен пропускает и кладет Principal в контекст", func(t *testing.T) {
 		id, mock := newActiveUser()
-		pair, err := auth.IssuePair(cfg, id, "user@example.com", models.RoleUser)
+		pair, err := auth.IssuePair(cfg, id, "user@example.com", domain.RoleUser)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -657,7 +656,7 @@ func TestAuthenticate(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
 		}
-		if got.ID != id || got.Role != models.RoleUser {
+		if got.ID != id || got.Role != domain.RoleUser {
 			t.Errorf("Principal = %+v, ожидается: id = %s, role = user", got, id)
 		}
 	})
@@ -688,7 +687,7 @@ func TestAuthenticate(t *testing.T) {
 
 	t.Run("Атака: refresh-токен вместо access-токена -> 401 (проверка audience)", func(t *testing.T) {
 		id, mock := newActiveUser()
-		pair, _ := auth.IssuePair(cfg, id, "user@example.com", models.RoleUser)
+		pair, _ := auth.IssuePair(cfg, id, "user@example.com", domain.RoleUser)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.RefreshToken}) // чужое назначение
@@ -702,7 +701,7 @@ func TestAuthenticate(t *testing.T) {
 
 	t.Run("Пользователь удален из БД -> 401", func(t *testing.T) {
 		mock := newMockUserLookup() // пустой мок: пользователя нет
-		pair, _ := auth.IssuePair(cfg, uuid.New(), "ghost@example.com", models.RoleUser)
+		pair, _ := auth.IssuePair(cfg, uuid.New(), "ghost@example.com", domain.RoleUser)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
@@ -714,8 +713,8 @@ func TestAuthenticate(t *testing.T) {
 
 	t.Run("Заблокированный пользователь (status=inactive) -> 401", func(t *testing.T) {
 		id, mock := newActiveUser()
-		mock.users[id].Status = models.StatusInactive
-		pair, _ := auth.IssuePair(cfg, id, "user@example.com", models.RoleUser)
+		mock.users[id].Status = domain.StatusInactive
+		pair, _ := auth.IssuePair(cfg, id, "user@example.com", domain.RoleUser)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
@@ -728,7 +727,7 @@ func TestAuthenticate(t *testing.T) {
 	t.Run("БД недоступна -> 503 (не раскрывается внутренняя ошибка)", func(t *testing.T) {
 		mock := newMockUserLookup()
 		mock.err = errors.New("В соединении отказано")
-		pair, _ := auth.IssuePair(cfg, uuid.New(), "user@example.com", models.RoleUser)
+		pair, _ := auth.IssuePair(cfg, uuid.New(), "user@example.com", domain.RoleUser)
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
 		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})

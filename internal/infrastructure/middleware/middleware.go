@@ -19,7 +19,6 @@ import (
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
@@ -56,7 +55,7 @@ func JSONContentType(next http.Handler) http.Handler {
 }
 
 type UserLookup interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 }
 
 func Authenticate(cfg *config.Config, users UserLookup) func(http.Handler) http.Handler {
@@ -86,7 +85,7 @@ func Authenticate(cfg *config.Config, users UserLookup) func(http.Handler) http.
 				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
 			}
-			if user.Status != models.StatusActive {
+			if user.Status != domain.StatusActive {
 				response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 				return
 			}
@@ -123,11 +122,11 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 }
 
 func RequireUserOrAdmin(next http.Handler) http.Handler {
-	return RequireRoles(models.RoleUser, models.RoleAdmin)(next)
+	return RequireRoles(domain.RoleUser, domain.RoleAdmin)(next)
 }
 
 func RequireAdmin(next http.Handler) http.Handler {
-	return RequireRoles(models.RoleAdmin)(next)
+	return RequireRoles(domain.RoleAdmin)(next)
 }
 
 const MaxJSONBodyBytes int64 = 1 << 20
