@@ -35,6 +35,10 @@ func main() {
 
 	users := persistence.NewUserRepository(pool)
 	tokens := persistence.NewTokenRepository(pool)
+	// Реализация порта domain.RateLimitStore: вся работа с БД для лимитов
+	// запросов инкапсулирована в инфраструктурном слое (репозитории),
+	// middleware получает только интерфейс.
+	rateLimitRepo := persistence.NewRateLimitRepository(pool)
 
 	// Слой use-case собирается здесь (Composition Root): сценарии получают
 	// репозитории и сервисы безопасности. HTTP-обработчики знают только
@@ -45,7 +49,7 @@ func main() {
 	authUC := usecase.NewAuthUseCase(users, tokens, hasher, jwtService, csrfService, cfg.AdminRegisterToken)
 	userUC := usecase.NewUserUseCase(users, tokens, hasher)
 
-	handler := router.New(cfg, authUC, userUC, users, pool, docs.OpenAPI)
+	handler := router.New(cfg, authUC, userUC, users, rateLimitRepo, docs.OpenAPI)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,

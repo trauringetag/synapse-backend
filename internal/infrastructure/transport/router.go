@@ -4,13 +4,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/handler"
+	"github.com/trauringetag/synapse-backend/internal/domain"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	"github.com/trauringetag/synapse-backend/internal/usecase"
@@ -20,7 +19,10 @@ import (
 // Composition Root) инъецируются в тонкие HTTP-обработчики.
 // last — порт пользователей, необходимый middleware аутентификации для
 // проверки статуса/роли по access-токену (это транспортный слой, не handlers).
-func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseCase, last middleware.UserLookup, pool *pgxpool.Pool, openAPI []byte) http.Handler {
+// rateLimitStore — порт domain.RateLimitStore (реализация — persistence.
+// RateLimitRepository): middleware лимитов запросов работает только через
+// него, без прямых SQL-запросов и зависимостей от пула БД.
+func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseCase, last middleware.UserLookup, rateLimitStore domain.RateLimitStore, openAPI []byte) http.Handler {
 	authH := handler.NewAuthHandler(cfg, authUC)
 	userH := handler.NewUserHandler(userUC)
 
@@ -61,18 +63,18 @@ func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseC
 		r.With(middleware.RequireAllowedOrigin(cfg)).Get("/csrf", authH.CSRFToken)
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.CSRF(cfg))
-			r.With(middleware.RateLimit(pool, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register", authH.Register)
-			r.With(middleware.RateLimit(pool, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register-admin", authH.RegisterAdmin)
-			r.With(middleware.RateLimit(pool, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey)).
-				With(middleware.RateLimit(pool, cfg.LoginRateLimit, time.Hour, middleware.AccountGlobalKey)).
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register", authH.Register)
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register-admin", authH.RegisterAdmin)
+			r.With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey)).
+				With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, time.Hour, middleware.AccountGlobalKey)).
 				Post("/login", authH.Login)
-			r.With(middleware.RateLimit(pool, cfg.RefreshRateLimit, time.Minute, middleware.RefreshKey)).Post("/refresh", authH.Refresh)
-			r.With(middleware.RateLimit(pool, cfg.LogoutRateLimit, time.Minute, middleware.IPKey)).
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RefreshRateLimit, time.Minute, middleware.RefreshKey)).Post("/refresh", authH.Refresh)
+			r.With(middleware.RateLimit(rateLimitStore, cfg.LogoutRateLimit, time.Minute, middleware.IPKey)).
 				Post("/logout", authH.Logout)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Authenticate(cfg, last))
-				r.Use(middleware.RateLimit(pool, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey))
+				r.Use(middleware.RateLimit(rateLimitStore, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey))
 				r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 				r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
 				r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)

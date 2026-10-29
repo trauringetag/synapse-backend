@@ -783,7 +783,7 @@ func TestRateLimit(t *testing.T) {
 	t.Run("Разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		called := 0
-		h := RateLimitWithStore(store, 2, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(store, 2, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called++
 			w.WriteHeader(http.StatusNoContent)
 		}))
@@ -805,7 +805,7 @@ func TestRateLimit(t *testing.T) {
 	})
 	t.Run("Разные IP используют разные счетчики", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
-		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		for _, ip := range []string{"192.0.2.1:1234", "192.0.2.2:1234"} {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = ip
@@ -820,7 +820,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 		store.now = func() time.Time { return now }
-		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		makeReq := func() *httptest.ResponseRecorder {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = "192.0.2.1:1234"
@@ -843,7 +843,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		var allowed int
 		var allowedMu sync.Mutex
-		h := RateLimitWithStore(store, 7, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(store, 7, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowedMu.Lock()
 			allowed++
 			allowedMu.Unlock()
@@ -872,7 +872,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		store.err = errors.New("Хранилище недоступно")
 		called := false
-		h := RateLimitWithStore(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 		if rec.Code != http.StatusServiceUnavailable {
@@ -883,7 +883,7 @@ func TestRateLimit(t *testing.T) {
 		}
 	})
 	t.Run("Некорректная конфигурация не отключает защиту молча", func(t *testing.T) {
-		h := RateLimitWithStore(newMemoryRateLimitStore(), 0, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(newMemoryRateLimitStore(), 0, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("Обработчик не должен вызываться")
 		}))
 		rec := httptest.NewRecorder()

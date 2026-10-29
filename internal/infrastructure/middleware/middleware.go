@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
@@ -143,29 +141,16 @@ func LimitBody(next http.Handler) http.Handler {
 	})
 }
 
-type RateLimitStore interface {
-	Increment(ctx context.Context, key string, window time.Duration) (int, error)
-}
+// RateLimitStore — локальный порт хранилища счётчиков лимитов запросов.
+// Единственный источник правды — domain.RateLimitStore
+// (internal/domain/rate_limit_store.go); здесь объявлен type-алиас, чтобы
+// middleware зависел только от контракта домена и не знал о реализации БД.
+// Инфраструктурная реализация — persistence.RateLimitRepository.
+type RateLimitStore = domain.RateLimitStore
 
-type postgresRateLimitStore struct{ pool *pgxpool.Pool }
-
-func (s postgresRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (int, error) {
-	if s.pool == nil {
-		return 0, errors.New("rate limit database is not configured")
-	}
-	if window < time.Second {
-		return 0, errors.New("rate limit window must be at least one second")
-	}
-	var count int
-	err := s.pool.QueryRow(ctx, `INSERT INTO api_rate_limits (bucket_key, window_start, hits) VALUES ($1, to_timestamp(floor(extract(epoch from now()) / $2) * $2), 1) ON CONFLICT (bucket_key) DO UPDATE SET window_start = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN EXCLUDED.window_start ELSE api_rate_limits.window_start END, hits = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN 1 ELSE api_rate_limits.hits + 1 END RETURNING hits`, key, int(window.Seconds())).Scan(&count)
-	return count, err
-}
-
-func RateLimit(pool *pgxpool.Pool, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
-	return RateLimitWithStore(postgresRateLimitStore{pool: pool}, limit, window, keyFn)
-}
-
-func RateLimitWithStore(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+// RateLimit возвращает middleware ограничения частоты запросов, использующий
+// переданный порт store.Increment для учёта попаданий в окне window.
+func RateLimit(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if limit < 1 || window <= 0 || store == nil || keyFn == nil {
