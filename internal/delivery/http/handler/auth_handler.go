@@ -3,7 +3,8 @@ package handler
 // Тонкий HTTP-слой аутентификации: обработчики только декодируют запрос,
 // вызывают метод use-case (internal/usecase) и формируют HTTP-ответ.
 // Вся бизнес-логика — валидация, bcrypt, JWT-ротация, CSRF, проверка ролей
-// и статусов — перенесена в слой use-case.
+// и статусов — перенесена в слой use-case. Ошибки маппятся через
+// respondError/handleUseCaseError (errors.go).
 
 import (
 	"net/http"
@@ -15,6 +16,10 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
+// AuthHandler — тонкий HTTP-обработчик поверх usecase.AuthUseCase.
+// Хранит cfg только как транспортную деталь: конфигурация cookie
+// (Secure/SameSite/Path) нужна при установке cookie из DTO use-case.
+// UserStore/TokenStore и бизнес-логика сюда больше не передаются.
 type AuthHandler struct {
 	cfg *config.Config
 	uc  usecase.AuthUseCase
@@ -99,18 +104,21 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	raw, _ := auth.ReadCookie(r, auth.RefreshCookie)
-	pair, ok, err := h.uc.Refresh(r.Context(), usecase.RefreshInput{RawRefreshToken: raw})
+	res, err := h.uc.Refresh(r.Context(), usecase.RefreshInput{RawRefreshToken: raw})
 	if err != nil {
-		auth.ClearTokenCookies(w, h.cfg)
+		if res != nil && res.ClearCookies {
+			auth.ClearTokenCookies(w, h.cfg)
+		}
 		respondError(w, err)
 		return
 	}
-	if !ok {
+	if res.Pair == nil {
+		// Use-case классифицировал ротацию как отказ (просрочен/отозван/replay).
 		auth.ClearTokenCookies(w, h.cfg)
 		response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 		return
 	}
-	setTokenCookies(w, h.cfg, pair)
+	setTokenCookies(w, h.cfg, res.Pair)
 	response.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
 }
 

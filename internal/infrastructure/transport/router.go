@@ -13,23 +13,14 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/handler"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
-	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
-// New собирает HTTP-транспорт: инфраструктурные репозитории и сервисы
-// безопасности инъецируются в слой use-case, а use-case'ы — в тонкие
-// HTTP-обработчики (Dependency Injection).
-func New(cfg *config.Config, users usecase.UserRepository, tokens usecase.TokenRepository, pool *pgxpool.Pool, openAPI []byte) http.Handler {
-	authUC := usecase.NewAuthUseCase(
-		users,
-		tokens,
-		auth.NewJWTService(cfg),
-		auth.NewCSRFService(cfg),
-		cfg.AdminRegisterToken,
-	)
-	userUC := usecase.NewUserUseCase(users, tokens)
-
+// New собирает HTTP-транспорт: готовые use-case'ы (созданные в main.go —
+// Composition Root) инъецируются в тонкие HTTP-обработчики.
+// last — порт пользователей, необходимый middleware аутентификации для
+// проверки статуса/роли по access-токену (это транспортный слой, не handlers).
+func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseCase, last middleware.UserLookup, pool *pgxpool.Pool, openAPI []byte) http.Handler {
 	authH := handler.NewAuthHandler(cfg, authUC)
 	userH := handler.NewUserHandler(userUC)
 
@@ -80,7 +71,7 @@ func New(cfg *config.Config, users usecase.UserRepository, tokens usecase.TokenR
 				Post("/logout", authH.Logout)
 
 			r.Group(func(r chi.Router) {
-				r.Use(middleware.Authenticate(cfg, users))
+				r.Use(middleware.Authenticate(cfg, last))
 				r.Use(middleware.RateLimit(pool, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey))
 				r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 				r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)

@@ -13,7 +13,9 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/database"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/persistence"
+	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/transport"
+	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 func main() {
@@ -33,7 +35,16 @@ func main() {
 
 	users := persistence.NewUserRepository(pool)
 	tokens := persistence.NewTokenRepository(pool)
-	handler := router.New(cfg, users, tokens, pool, docs.OpenAPI)
+
+	// Слой use-case собирается здесь (Composition Root): сценарии получают
+	// репозитории и сервисы безопасности. HTTP-обработчики знают только
+	// интерфейсы usecase.AuthUseCase / usecase.UserUseCase.
+	jwtService := auth.NewJWTService(cfg)
+	csrfService := auth.NewCSRFService(cfg)
+	authUC := usecase.NewAuthUseCase(users, tokens, jwtService, csrfService, cfg.AdminRegisterToken)
+	userUC := usecase.NewUserUseCase(users, tokens)
+
+	handler := router.New(cfg, authUC, userUC, users, pool, docs.OpenAPI)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,

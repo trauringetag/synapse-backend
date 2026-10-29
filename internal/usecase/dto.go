@@ -104,6 +104,19 @@ type CSRFResult struct {
 	Token string
 }
 
+// RefreshResult — результат ротации refresh-токена (Refresh).
+// HTTP-слой, не зная бизнес-правил, действует по этим флагам:
+//   - Pair != nil -> 200 + установить новые cookie;
+//   - ClearCookies -> сбросить refresh-cookie (всегда при отказе/ошибке);
+//   - Reject -> отклонить токен (401 с сообщением InvalidOrExpiredRefreshToken);
+//   - InternalError -> ошибка уже классифицирована (respondError подберёт статус).
+type RefreshResult struct {
+	Pair          *TokenPair
+	ClearCookies  bool
+	Reject        bool
+	InternalError bool
+}
+
 // ---------- Интерфейсы сценариев использования ----------
 
 // SessionResult — результат входа: пользователь и выпущенная пара токенов.
@@ -121,9 +134,11 @@ type AuthUseCase interface {
 	Register(ctx context.Context, in RegisterInput) (*models.User, error)
 	RegisterAdmin(ctx context.Context, in RegisterInput) (*models.User, error)
 	Login(ctx context.Context, in LoginInput) (*SessionResult, error)
-	// Refresh возвращает пару токенов; ok == false означает «отклонить токен»
-	// (401). Атрибут ClearCookies указывает HTTP-слою сбросить cookie.
-	Refresh(ctx context.Context, in RefreshInput) (pair *TokenPair, ok bool, err error)
+	// Refresh возвращает результат ротации refresh-токена:
+	//   - Pair != nil               -> успех: установить новые cookie;
+	//   - Reject && !InternalError  -> отклонить: 401 + сброс cookie;
+	//   - InternalError             -> внутренняя ошибка: 5xx + сброс cookie.
+	Refresh(ctx context.Context, in RefreshInput) (*RefreshResult, error)
 	Logout(ctx context.Context, in LogoutInput) error
 	IssueCSRF() (*CSRFResult, error)
 }

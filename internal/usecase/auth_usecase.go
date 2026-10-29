@@ -234,27 +234,28 @@ func (uc *AuthUseCaseImpl) issueSession(ctx context.Context, user *models.User) 
 
 // ---------- Ротация refresh-токена ----------
 
-// Refresh выполняет ротацию refresh-токена:
-//   - pair != nil, ok == true, err == nil -> успех: установить новые cookie, 200;
-//   - ok == false, err == nil             -> отклонить: 401 + сброс cookie;
-//   - err != nil                          -> внутренняя ошибка: 500 + сброс cookie.
+// Refresh выполняет ротацию refresh-токена и возвращает структурированный
+// результат (RefreshResult), чтобы HTTP-слой оставался тонким и не знал
+// бизнес-правил:
+//   - Pair != nil                          -> успех: установить новые cookie, 200;
+//   - Reject                               -> отклонить токен: 401 + сброс cookie;
+//   - InternalError                        -> внутренняя ошибка: 5xx + сброс cookie.
 //
 // Replay-атака (повторное использование отозванного токена) приводит к отзыву
 // всех сессий пользователя и отклонению (401).
-func (uc *AuthUseCaseImpl) Refresh(ctx context.Context, in RefreshInput) (pair *TokenPair, ok bool, err error) {
-	const reject = false
-	const accepted = true
+func (uc *AuthUseCaseImpl) Refresh(ctx context.Context, in RefreshInput) (*RefreshResult, error) {
+	reject := &RefreshResult{ClearCookies: true, Reject: true}
 
 	if in.RawRefreshToken == "" {
-		return nil, reject, nil
+		return reject, nil
 	}
 	subject, err := uc.issuer.ParseRefresh(in.RawRefreshToken)
 	if err != nil {
-		return nil, reject, nil
+		return reject, nil
 	}
 	id, err := domain.UUIDFromString(subject)
 	if err != nil {
-		return nil, reject, nil
+		return reject, nil
 	}
 
 	var issued *TokenPair
@@ -273,18 +274,21 @@ func (uc *AuthUseCaseImpl) Refresh(ctx context.Context, in RefreshInput) (pair *
 			if revokeErr := uc.tokens.RevokeAllForUser(ctx, id); revokeErr != nil {
 				log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", id.String(), revokeErr)
 			}
-			return nil, reject, nil
+			return reject, nil
 		case errors.Is(err, domain.ErrNotFound), errors.Is(err, domain.ErrInactiveTokenUser):
 			if errors.Is(err, domain.ErrInactiveTokenUser) {
 				log.Printf("security_event=refresh_denied_inactive_user user_id=%s", id.String())
 			}
-			return nil, reject, nil
+			return reject, nil
 		default:
 			log.Printf("event=refresh_rotation_failed user_id=%s error_type=%T", id.String(), err)
-			return nil, accepted, wrapErr(ErrCodeInternal, messages.FailedToIssueTokens, err)
+			return &RefreshResult{
+				ClearCookies:  true,
+				InternalError: true,
+			}, wrapErr(ErrCodeInternal, messages.FailedToIssueTokens, err)
 		}
 	}
-	return issued, accepted, nil
+	return &RefreshResult{Pair: issued}, nil
 }
 
 // ---------- Выход ----------
