@@ -1,55 +1,139 @@
 openapi: 3.0.3
 info:
   title: Synapse API
-  version: 1.0.8
+  version: 1.0.29.2
   description: |
-    REST API для регистрации, аутентификации через JWT-куки и управления пользователями на основе ролей.
+    REST API на Go (chi) с PostgreSQL для регистрации, аутентификации и ролевого
+    управления пользователями. Спецификация полностью соответствует текущей
+    реализации (`internal/infrastructure/transport/router.go`,
+    `internal/delivery/http/handler`, `internal/infrastructure/middleware`).
 
-    **Аутентификация:** Токены доступа (access) и обновления (refresh) передаются в виде **HttpOnly куки**
-    (`access_token`, `refresh_token`). Они **не** считываются из заголовка `Authorization`.
+    ## Аутентификация
 
-    Эндпоинты, помеченные схемой безопасности `cookieAuth`, требуют наличия валидной куки `access_token`.
+    - Токены передаются **только в HttpOnly cookie**: `access_token` (короткий срок)
+      и `refresh_token` (длинный срок). Заголовок `Authorization` не используется.
+    - Cookie имеют `Path=/api/v1/`, `HttpOnly=true`, флаги `Secure` (`COOKIE_SECURE`)
+      и `SameSite` (`COOKIE_SAMESITE`: Lax/Strict/None), опциональный `Domain` (`COOKIE_DOMAIN`).
+    - JWT подписывается HS256 (`JWT_SECRET`, минимум 32 символа), `issuer=synapse-backend`,
+      назначение токена (`access`/`refresh`) хранится в claim `aud`.
+    - В БД хранится только SHA-256 хеш refresh-токена, не его исходное значение.
+    - Схема безопасности `cookieAuth` требует валидную cookie `access_token`; middleware
+      проверяет подпись/тип/срок токена и загружает пользователя из БД: он должен
+      существовать и иметь статус `active`, роль также берётся из БД на каждом запросе.
+      Ошибка чтения БД закрывает доступ (`503 SERVICE_UNAVAILABLE`).
 
-    Флаги куки: `HttpOnly`, `Secure` (если `COOKIE_SECURE=true`), `SameSite` (Lax/Strict), `Path=/api/v1/`.
+    ## CSRF и Origin
 
-    CORS настроен с `Access-Control-Allow-Credentials: true` и явным списком разрешенных источников (origin allow-list).
+    - Все изменяющие запросы (`POST`, `PUT`, `PATCH`, `DELETE`) проходят через
+      `middleware.CSRF`, включая публичные `/register`, `/register-admin`, `/login`,
+      `/refresh`, `/logout`. Поэтому `security: []` означает отсутствие access/refresh
+      аутентификации, но **не** отменяет CSRF-проверку.
+    - Требуется разрешённый источник: `Origin` сверяется с allow-list `CORS_ORIGINS`;
+      если `Origin` отсутствует, используется origin из `Referer`. При отсутствии обоих
+      заголовков или при неразрешённом источнике — `403 FORBIDDEN`
+      («Недопустимый Origin»). Разрешённый `Referer` не может переопределить явно
+      запрещённый `Origin`.
+    - Требуется cookie `csrf_token` и заголовок `X-CSRF-Token` со совпадающим значением
+      (`hmac.Equal`). Токен имеет формат `nonce.HMAC-SHA256(nonce, JWT_SECRET)` и выдаётся
+      `GET /api/v1/csrf` (cookie живёт 1 час, `HttpOnly=false`).
+    - `GET /api/v1/csrf` дополнительно защищён `middleware.RequireAllowedOrigin`:
+      `Origin` обязателен, резервная проверка по `Referer` выполняется только когда
+      `Origin` полностью отсутствует.
+    - CORS настроен с `Access-Control-Allow-Credentials: true`, методами
+      `GET, POST, PUT, PATCH, DELETE, OPTIONS` и заголовками
+      `Accept, Content-Type, X-Admin-Token, X-Request-ID, X-CSRF-Token`, `MaxAge=300`.
 
-    **Фактические ограничения и известные расхождения с предыдущей версией спецификации**
+    ## Общие правила транспорта
 
-    - `GET /api/v1/csrf` — endpoint выдачи CSRF-токена. Ответ содержит `csrf_token` и устанавливает cookie `csrf_token` (не HttpOnly). Проверяется разрешённый `Origin`; только если `Origin` отсутствует, допускается резервная проверка origin из `Referer`. При отсутствии обоих заголовков или при запрещённом источнике возвращается `403`. Разрешённый `Referer` не может переопределить явно запрещённый `Origin`.
-    - CSRF-проверка применяется ко всем запросам, меняющим состояние (`POST`, `PUT`, `PATCH`, `DELETE`), включая публичные `/register`, `/register-admin`, `/login`, `/refresh` и `/logout`. Нужны разрешённый `Origin` (либо допустимый `Referer` при отсутствии `Origin`), cookie `csrf_token` и совпадающий заголовок `X-CSRF-Token`. Одного CORS или `SameSite` недостаточно. Поэтому `security: []` у публичных endpoint-ов означает отсутствие access/refresh-аутентификации, но не отсутствие CSRF-проверки.
-    - JSON-тело ограничено 1 MiB на общем HTTP-уровне. Превышение лимита возвращает `413 PAYLOAD_TOO_LARGE`; некорректный JSON, неизвестные поля и несколько JSON-значений в одном теле возвращают `400 VALIDATION_FAILED`.
-    - На `/login`, `/register`, `/register-admin` и `/refresh` установлен PostgreSQL-backed fixed-window rate limiter, общий для экземпляров сервиса. При превышении возвращается `429 RATE_LIMITED` с `Retry-After`. Начальные лимиты: login — 10 за 15 минут на IP + нормализованный email; регистрация и регистрация администратора — по 10 за час на IP; refresh — 30 в минуту по хешу refresh-cookie (если cookie отсутствует, ключ строится по IP). Параметры задаются `LOGIN_RATE_LIMIT`, `REGISTER_RATE_LIMIT`, `REFRESH_RATE_LIMIT`.
-    - **Ограничение login отличается от требуемой политики «10 неуспешных попыток»**: текущий счётчик увеличивается для каждого запроса к `/login`, а не только после неуспешной проверки учётных данных. Это намеренное замечание о фактической реализации, а не гарантия лимита только на ошибки входа.
-    - В предыдущем описании `/logout` схема `refreshCookie` выглядела обязательной, но обработчик фактически допускает запрос без refresh-cookie: в этом случае он очищает cookie и отвечает `200`. Если cookie присутствует, отзыв токена выполняется на сервере; при ошибке БД возвращается `500`.
-    - Документация endpoint-ов ранее не перечисляла общие ответы middleware и инфраструктуры: `403` при CSRF-ошибке, `413` при слишком большом теле, `429` при превышении лимита, `500` при внутренней ошибке и `503` при недоступности БД во время проверки авторизации/лимитера. Они могут появляться помимо бизнес-ответов, указанных у конкретного пути.
-    - `page` по умолчанию равен `1`, `limit` — `10`, максимальный `limit` — `100`; `search` ограничен 200 символами. Некорректные `page`, `limit`, `role`, `status` или слишком длинный `search` приводят к `400`.
-    - Аутентификация защищённых маршрутов использует cookie `access_token`, затем проверяет JWT и загружает актуального пользователя из БД. Пользователь должен существовать и иметь статус `active`; роль берётся из БД. Ошибка чтения пользователя из БД закрывает доступ и может вернуть `503`. Недостаточная роль возвращает `403`.
+    - JSON тела ограничены 1 MiB (`middleware.LimitBody`, все методы кроме GET/HEAD/OPTIONS):
+      превышение даёт `413 PAYLOAD_TOO_LARGE` («Размер тела запроса превышает допустимый лимит»).
+    - Декодер JSON отклоняет неизвестные поля (`DisallowUnknownFields`) и несколько JSON-значений
+      в одном теле: `400 VALIDATION_FAILED` («Некорректное тело JSON»).
+    - Ответы помечаются `X-Content-Type-Options: nosniff`; глобальные заголовки
+      `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`,
+      `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`.
+    - Для всех путей под `/api/v1` действует `Cache-Control: no-store, no-cache, must-revalidate, private`
+      и `Pragma: no-cache`. Служебные маршруты вне `/api/v1` возвращают
+      `Cache-Control: no-store` (`/health`) или `public, max-age=300` (`/docs`, `/openapi.yaml`).
+    - Форма ошибки: `{"error": "<категория>", "message": "<текст>", "details": {"поле": ["причина"]}}`,
+      где `details` отсутствует, если деталей нет. Категории: `VALIDATION_FAILED` (400),
+      `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409),
+      `RATE_LIMITED` (429), `PAYLOAD_TOO_LARGE` (413), `INTERNAL_SERVER_ERROR` (500),
+      `SERVICE_UNAVAILABLE` (503), `REQUEST_FAILED` (иной код).
+    - Rate limiting хранится в PostgreSQL (`api_rate_limits`), fixed window, fail-closed:
+      ошибка хранилища даёт `503 SERVICE_UNAVAILABLE` («Проверка авторизации временно недоступна»),
+      превышение — `429 RATE_LIMITED` («Слишком много запросов») с заголовком `Retry-After`
+      (длительность окна в секундах).
 
-    Это описание фиксирует выявленные различия между контрактом OpenAPI и текущим кодом. При изменении реализации спецификацию необходимо обновлять вместе с обработчиками и middleware.
+    ## Таблица лимитов и ключей счётчиков (по факту router.go)
+
+    | Маршрут | Окно | Порог (env) | Ключ счётчика |
+    | --- | --- | --- | --- |
+    | `POST /api/v1/login` (1-й limiter) | 15 минут | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login:<IP>:<нормализованный email>` |
+    | `POST /api/v1/login` (2-й limiter) | 1 час | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login_global:<email>` либо `login_global:invalid:<IP>` |
+    | `POST /api/v1/register` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
+    | `POST /api/v1/register-admin` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
+    | `POST /api/v1/refresh` | 1 минута | `REFRESH_RATE_LIMIT`, по умолчанию 30 | `refresh:<SHA-256 cookie>` либо `refresh:<IP>` |
+    | `POST /api/v1/logout` | 1 минута | `LOGOUT_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
+    | защищённые `/api/v1/users*` | 1 минута | `AUTHENTICATED_RATE_LIMIT`, по умолчанию 600 | `user:<UUID>` либо `ip:<IP>` |
+
+    Логин защищён **двумя** последовательными фиксированными окнами: 10 запросов за
+    15 минут на пару IP+email и 10 запросов за 1 час на email (при нераспознанном email —
+    на IP). Счётчики увеличиваются на **каждом** запросе, включая успешный вход, поэтому
+    реализация не эквивалентна политике «10 неуспешных попыток». Email извлекается из тела
+    запроса (до 1 MiB); IP берётся из `RemoteAddr` после `chimw.RealIP`, при размещении за
+    reverse proxy доверие к `X-Forwarded-For` определяется конфигурацией прокси.
+
+    ## Известные особенности реализации
+
+    - `POST /api/v1/logout` не требует refresh-cookie: без неё возвращается `200` и cookie
+      очищаются; при наличии cookie выполняется отзыв токена, ошибка БД даёт `500`
+      (cookie при этом всё равно очищаются).
+    - `POST /api/v1/refresh` при отказе (пустая/невалидная cookie, replay, неактивный
+      пользователь) всегда сбрасывает auth-cookie и отвечает `401`; внутренняя ошибка
+      ротации даёт `500 INTERNAL_SERVER_ERROR` («Не удалось выпустить токены»).
+      Повторное использование отозванного токена отзывает все сессии пользователя
+      и логируется как `security_event=refresh_token_reuse`.
+    - Поле `role` принимается только `POST /api/v1/users`; в `PUT`/`PATCH /api/v1/users/{id}`
+      оно декодируется, но игнорируется (роль существующего пользователя не меняется).
+    - Секрет админской регистрации читается только из заголовка `X-Admin-Token`;
+      JSON-поля для секрета нет. Проверка выполняется после валидации полей.
+    - Смена пароля через `PATCH /api/v1/users/{id}` отзывает все refresh-токены пользователя;
+      `PUT /api/v1/users/{id}` с новым паролем сессии **не** отзывает.
+    - Удаление собственного аккаунта и любого аккаунта с ролью `admin` запрещено (`403`).
 servers:
   - url: /api/v1
-    description: Версия 1
+    description: Префикс версии 1 (внутри приложения)
+  - url: http://localhost:8080/api/v1
+    description: Локальный запуск / Docker Compose (порт хоста задаётся API_HOST_PORT)
 tags:
   - name: Auth
-    description: Регистрация и сессионные эндпоинты (куки)
+    description: CSRF-токен, регистрация, вход, ротация токенов, выход
   - name: Users
-    description: Профиль и административное управление пользователями
+    description: Собственный профиль и административное управление пользователями
 components:
   securitySchemes:
     cookieAuth:
       type: apiKey
       in: cookie
       name: access_token
-      description: Кратковременный JWT токен доступа в HttpOnly куки. Требуется для защищенных эндпоинтов.
+      description: |
+        HttpOnly JWT access-токена (HS256, aud=access). Требуется для защищённых маршрутов.
+        Middleware проверяет подпись, тип и срок, затем загружает пользователя из БД
+        (обязателен статус `active`, роль берётся из БД).
     refreshCookie:
       type: apiKey
       in: cookie
       name: refresh_token
-      description: Долговременный JWT токен обновления в HttpOnly куки. Требуется для /refresh и используется в /logout.
+      description: |
+        HttpOnly JWT refresh-токена (HS256, aud=refresh). Обязателен для `POST /refresh`;
+        для `POST /logout` он необязателен (без cookie вызов всё равно завершается успешно).
   schemas:
     User:
       type: object
+      description: |
+        Канонический ответ слоя пользователей (`domain.User`). Поле `password_hash`
+        в JSON никогда не отдаётся (`json:"-"`).
       required:
         - id
         - email
@@ -63,19 +147,30 @@ components:
         id:
           type: string
           format: uuid
+          example: 5f0c7c2e-6b1a-4f3d-9a1d-2c7b6a5e4d31
         email:
           type: string
           format: email
+          maxLength: 255
+          description: Нормализуется сервером (обрезка пробелов, lowercase)
+          example: ada@example.com
         role:
           type: string
           enum: [user, admin]
         status:
           type: string
           enum: [active, inactive]
+          description: Созданные пользователи всегда получают статус `active`
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
+          example: Ada
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
+          example: Lovelace
         created_at:
           type: string
           format: date-time
@@ -84,158 +179,265 @@ components:
           format: date-time
     Error:
       type: object
+      description: Единая форма ошибок HTTP-слоя (`response.ErrorBody`).
       required:
         - error
         - message
       properties:
         error:
           type: string
-          example: Validation Failed
+          description: Категория по HTTP-коду
+          enum:
+            - VALIDATION_FAILED
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - PAYLOAD_TOO_LARGE
+            - RATE_LIMITED
+            - INTERNAL_SERVER_ERROR
+            - SERVICE_UNAVAILABLE
+            - REQUEST_FAILED
+          example: VALIDATION_FAILED
         message:
           type: string
+          description: Человекочитаемое сообщение (русский словарь internal/messages)
           example: Проверьте обязательные поля пользователя
         details:
           type: object
+          description: Ошибки валидации по полям; отсутствует, если деталей нет
           additionalProperties:
             type: array
             items:
               type: string
           example:
             email: ["Укажите действительный email"]
-            password: ["Пароль должен содержать не менее 8 символов"]
+            password: ["Пароль должен содержать не менее 8 символов (либо была зафиксирована попытка ввести слишком длинный пароль)"]
     Message:
       type: object
+      description: 'Короткий текстовый ответ вида {"message": "..."}.'
       required:
         - message
       properties:
         message:
           type: string
+          example: Токены обновлены
+    StatusResponse:
+      type: object
+      description: |
+        Ответ служебного маршрута `GET /health` (вне `/api/v1`, поэтому не входит в
+        операции этого документа): `{"status": "OK"}` с заголовками
+        `Content-Type: application/json` и `Cache-Control: no-store`.
+        Состояние БД в нём **не** проверяется.
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: OK
+    CsrfTokenResponse:
+      type: object
+      required:
+        - csrf_token
+      properties:
+        csrf_token:
+          type: string
+          description: Значение формата `nonce.signature` (HMAC-SHA256 от JWT_SECRET)
+          example: 9J2x...KfQ.uV1h...z3A
     RegisterRequest:
       type: object
-      required:
-        - email
-        - password
-        - first_name
-        - last_name
+      description: Тело `POST /register` и `POST /register-admin`. Неизвестные поля отклоняются.
+      required: [email, password, first_name, last_name]
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
+          description: Обязателен, содержит `@`, нормализуется (trim + lowercase)
         password:
           type: string
+          format: password
           minLength: 8
+          maxLength: 72
+          description: От 8 символов и не более 72 байт (ограничение bcrypt)
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
+          description: Обрезается по краям, не может быть пустым
         last_name:
           type: string
-    RegisterAdminRequest:
-      allOf:
-        - $ref: '#/components/schemas/RegisterRequest'
-        - type: object
+          minLength: 1
+          maxLength: 255
     LoginRequest:
       type: object
-      required:
-        - email
-        - password
+      description: |
+        Тело `POST /login`. Оба поля обязательны (строки); email дополнительно
+        ограничен 255 символами, пароль — 72 байтами, иначе ответ `400`
+        с сообщением «Некорректное тело JSON».
+      required: [email, password]
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
         password:
           type: string
+          format: password
+          maxLength: 72
+    LoginResponse:
+      type: object
+      description: Ответ успешного входа. JWT в JSON не возвращаются — только в `Set-Cookie`.
+      required: [message, user]
+      properties:
+        message:
+          type: string
+          example: Авторизация успешна
+        user:
+          $ref: '#/components/schemas/User'
+    RefreshResponse:
+      allOf:
+        - $ref: '#/components/schemas/Message'
+      description: 'Ответ `POST /refresh`: `{"message":"Токены обновлены"}`.'
+    LogoutResponse:
+      allOf:
+        - $ref: '#/components/schemas/Message'
+      description: 'Ответ `POST /logout`: `{"message":"Вышли из системы"}`.'
     CreateUserRequest:
       type: object
-      required:
-        - email
-        - password
-        - first_name
-        - last_name
+      description: |
+        Тело `POST /users` (админ). `role` — единственное место, где роль задаётся явно;
+        допускается `user` (по умолчанию) или `admin`, другие значения дают `400`.
+      required: [email, password, first_name, last_name]
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
         password:
           type: string
+          format: password
           minLength: 8
+          maxLength: 72
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
         role:
           type: string
           enum: [user, admin]
           default: user
-          description: По умолчанию 'user'.
+          description: Необязательное поле; пустая строка трактуется как `user`
     UpdateUserRequest:
       type: object
-      required:
-        - email
-        - password
-        - first_name
-        - last_name
-        - status
+      description: |
+        Тело `PUT /users/{id}` (админ, полная замена редактируемых полей).
+        Все пять полей обязательны. Поле `role` принимается декодером, но игнорируется:
+        роль пользователя остаётся прежней.
+      required: [email, password, first_name, last_name, status]
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
         password:
           type: string
+          format: password
           minLength: 8
+          maxLength: 72
+          description: Новый bcrypt-хеш записывается всегда
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
         status:
           type: string
           enum: [active, inactive]
+        role:
+          type: string
+          description: Игнорируется сервером (роль через PUT не меняется)
+          nullable: true
     PatchUserRequest:
       type: object
+      description: |
+        Тело `PATCH /users/{id}` (админ). Все поля необязательны, но хотя бы одно
+        обязательно. Пустое тело даёт `400` («Пустые данные обновления»,
+        `details.body = ["Укажите хотя бы одно поле"]`).
+      minProperties: 1
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
+          description: Пустое или невалидное значение отклоняется
         password:
           type: string
+          format: password
           minLength: 8
+          maxLength: 72
+          description: При смене пароля все refresh-токены пользователя отзываются
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
         status:
           type: string
           enum: [active, inactive]
     UpdateMeRequest:
       type: object
-      required:
-        - email
-        - first_name
-        - last_name
+      description: |
+        Тело `PUT /users/me` — полная замена профиля самим пользователем.
+        Роль и статус изменять нельзя; неизвестные поля (например `role`, `status`,
+        `password`) отклоняются с `400`.
+      required: [email, first_name, last_name]
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
     PatchMeRequest:
       type: object
+      description: |
+        Тело `PATCH /users/me` — частичное обновление профиля. Хотя бы одно поле
+        обязательно; пустое тело даёт `400`.
+      minProperties: 1
       properties:
         email:
           type: string
           format: email
+          maxLength: 255
         first_name:
           type: string
+          minLength: 1
+          maxLength: 255
         last_name:
           type: string
+          minLength: 1
+          maxLength: 255
     UserListResponse:
       type: object
-      required:
-        - items
-        - page
-        - limit
-        - total
-        - total_pages
+      description: Страница пользователей с метаданными пагинации.
+      required: [items, page, limit, total, total_pages]
       properties:
         items:
           type: array
@@ -244,65 +446,395 @@ components:
         page:
           type: integer
           minimum: 1
+          description: Фактически применённая страница
         limit:
           type: integer
           minimum: 1
           maximum: 100
+          description: Фактически применённый размер страницы
         total:
           type: integer
           format: int64
+          description: Общее число пользователей, удовлетворяющих фильтрам
         total_pages:
           type: integer
           format: int64
+          description: ceil(total / limit); при total = 0 равен 0
   headers:
-    CacheControl:
-      description: Явное управление кэшированием. Для защищенных JSON-ответов используется no-store.
+    SetCookieAuth:
+      description: |
+        `Set-Cookie` для `access_token` и `refresh_token`: `HttpOnly`,
+        `Path=/api/v1/`, `Secure` по `COOKIE_SECURE`, `SameSite` по `COOKIE_SAMESITE`,
+        опциональный `Domain`, `Max-Age` по срокам токенов.
+      schema:
+        type: string
+    SetCookieCleared:
+      description: Те же cookie, сброшенные до истёкших (`Max-Age=-1`, `Expires=Thu, 01 Jan 1970`).
+      schema:
+        type: string
+    SetCookieCsrf:
+      description: |
+        `csrf_token=<значение>; Path=/api/v1/; Max-Age=3600; SameSite=<COOKIE_SAMESITE>;
+        Secure=<COOKIE_SECURE>` — намеренно **без** `HttpOnly`, чтобы frontend мог прочитать токен.
+      schema:
+        type: string
+    CacheControlNoStore:
+      description: |
+        Устанавливается middleware `CacheControl` для всего `/api/v1`
+        (заголовок присутствует и в ответах с ошибкой).
       schema:
         type: string
         example: no-store, no-cache, must-revalidate, private
+    RetryAfter:
+      description: Длительность текущего окна лимитера в секундах (например `900`, `3600`, `60`).
+      schema:
+        type: integer
+  parameters:
+    UserId:
+      in: path
+      name: id
+      required: true
+      description: UUID пользователя. Невалидный формат даёт `400` («Неверный идентификатор пользователя»).
+      schema:
+        type: string
+        format: uuid
+    Page:
+      in: query
+      name: page
+      required: false
+      description: |
+        Номер страницы. Целое >= 1, по умолчанию `1`. Неразбираемое значение или `< 1`
+        дают `400` с `details.page = ["Значение должно быть положительным числом"]`.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      in: query
+      name: limit
+      required: false
+      description: |
+        Размер страницы, от 1 до 100, по умолчанию `10`. Вне диапазона — `400`
+        с `details.limit = ["Значение должно быть от 1 до 100"]`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    Search:
+      in: query
+      name: search
+      required: false
+      description: |
+        Поиск по email, имени, фамилии и строке «имя фамилия»: `ILIKE '%значение%'`
+        плюс полнотекстовый поиск `to_tsvector('simple', ...)`. Значение обрезается,
+        регистр фильтров `role`/`status` не учитывается. Длиннее 200 символов — `400`.
+      schema:
+        type: string
+        maxLength: 200
+    RoleFilter:
+      in: query
+      name: role
+      required: false
+      description: Фильтр по роли (`user` или `admin`); недопустимое значение даёт `400`.
+      schema:
+        type: string
+        enum: [user, admin]
+    StatusFilter:
+      in: query
+      name: status
+      required: false
+      description: Фильтр по статусу (`active` или `inactive`); недопустимое значение даёт `400`.
+      schema:
+        type: string
+        enum: [active, inactive]
+  responses:
+    BadRequest:
+      description: |
+        `400 VALIDATION_FAILED` — неверный запрос: невалидные поля, неизвестные поля JSON,
+        некорректный JSON или несколько значений в теле, неверный UUID, недопустимые
+        query-параметры, превышение длины `search`, пустое тело PATCH.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            validation:
+              summary: Ошибка валидации полей
+              value:
+                error: VALIDATION_FAILED
+                message: Проверьте обязательные поля пользователя
+                details:
+                  email: ["Укажите действительный email"]
+                  password: ["Пароль должен содержать не менее 8 символов (либо была зафиксирована попытка ввести слишком длинный пароль)"]
+                  first_name: ["Имя обязательно для заполнения"]
+                  last_name: ["Фамилия обязательна для заполнения"]
+            json:
+              summary: Некорректное тело
+              value:
+                error: VALIDATION_FAILED
+                message: Некорректное тело JSON
+            pagination:
+              summary: Недопустимые параметры пагинации
+              value:
+                error: VALIDATION_FAILED
+                message: Недопустимые параметры ограничения количества страниц
+                details:
+                  limit: ["Значение должно быть от 1 до 100"]
+            uuid:
+              summary: Неверный идентификатор пользователя
+              value:
+                error: VALIDATION_FAILED
+                message: Неверный идентификатор пользователя
+            parameter:
+              summary: Недопустимое значение фильтра
+              value:
+                error: VALIDATION_FAILED
+                message: Недопустимое значение параметра
+                details:
+                  role: ["Допустимые значения: user, admin"]
+    Unauthorized:
+      description: |
+        `401 UNAUTHORIZED` — отсутствие или недействительность аутентификации.
+        Возможные сообщения: «Необходима авторизация для получения доступа»,
+        «Недействительный или просроченный Access-токен», «Недопустимый токен субъекта»,
+        «Не авторизован» (пользователь удалён или неактивен),
+        «Неверные данные авторизации (email или пароль)»,
+        «Отсутствует Cookie-файл Refresh-токена»,
+        «Недействительный или просроченный Refresh-токен».
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: UNAUTHORIZED
+            message: Недействительный или просроченный Access-токен
+    Forbidden:
+      description: |
+        `403 FORBIDDEN` — запрет по политике безопасности. Возможные сообщения:
+        «Недопустимый Origin» (CSRF/Origin middleware), «Недействительный CSRF-токен»,
+        «Недостаточно прав» (роль из БД не подходит), «Доступ к данному контуру ограничен»
+        (неверный `X-Admin-Token`), «Администратор не может удалить собственную учетную запись»,
+        «Нельзя удалить учетную запись администратора».
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: FORBIDDEN
+            message: Недостаточно прав
+    NotFound:
+      description: |
+        `404 NOT_FOUND` — ресурс не найден. Сообщение «Пользователь не найден»
+        (для защищённых маршрутов пользователь мог быть удалён между запросами).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: NOT_FOUND
+            message: Пользователь не найден
+    Conflict:
+      description: '`409 CONFLICT` — email уже используется (уникальность `users.email`).'
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: CONFLICT
+            message: Email уже используется
+    PayloadTooLarge:
+      description: |
+        `413 PAYLOAD_TOO_LARGE` — тело запроса больше 1 MiB (`http.MaxBytesError`
+        при декодировании или переполнение буфера лимитера).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: PAYLOAD_TOO_LARGE
+            message: Размер тела запроса превышает допустимый лимит
+    RateLimited:
+      description: |
+        `429 RATE_LIMITED` — превышен порог fixed-window лимитера («Слишком много запросов»),
+        `Retry-After` равен длительности окна в секундах.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: RATE_LIMITED
+            message: Слишком много запросов
+    InternalServerError:
+      description: |
+        `500 INTERNAL_SERVER_ERROR` — внутренняя ошибка приложения. Сообщения:
+        «Не удалось создать пользователя», «Не удалось получить пользователя»,
+        «Не удалось получить список пользователей», «Не удалось обновить пользователя»,
+        «Не удалось удалить пользователя», «Не удалось хешировать пароль»,
+        «Не удалось выпустить токены», «Не удалось завершить сессию. Повторите попытку позже»,
+        «Не удалось подготовить CSRF-защиту запроса». Также возникает при неклассифицированных
+        паниках/ошибках (`chimw.Recoverer`).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: INTERNAL_SERVER_ERROR
+            message: Не удалось обновить пользователя
+    ServiceUnavailable:
+      description: |
+        `503 SERVICE_UNAVAILABLE` — зависимость недоступна, сообщение всегда одно:
+        «Проверка авторизации временно недоступна». Причины: ошибка БД при загрузке
+        пользователя в middleware аутентификации, ошибка `GetByEmail` при входе,
+        ошибка или некорректная конфигурация rate-limit хранилища (fail-closed).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlNoStore'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: SERVICE_UNAVAILABLE
+            message: Проверка авторизации временно недоступна
 paths:
   /csrf:
     get:
-      tags:
-        - Auth
-      summary: Получение CSRF-токена
+      tags: [Auth]
+      summary: Выдача CSRF-токена и cookie
       description: |
-        Выдаёт подписанный CSRF-токен в JSON и устанавливает cookie `csrf_token` на срок до одного часа.
-        Для изменяющих состояние запросов передавайте полученное значение в `X-CSRF-Token`; cookie должна
-        также автоматически отправляться браузером. Этот endpoint требует явный разрешённый `Origin` из
-        `CORS_ORIGINS`; запрос без `Origin` или с неразрешённым значением отклоняется с `403`. Endpoint не требует access-токена.
+        Возвращает подписанный токен `nonce.HMAC-SHA256(nonce, JWT_SECRET)` и устанавливает
+        cookie `csrf_token` (`Path=/api/v1/`, `Max-Age=3600`, **не** HttpOnly).
+        Защищён `RequireAllowedOrigin`: требуется `Origin` из `CORS_ORIGINS`;
+        при отсутствии `Origin` допускается `Referer`. Оба заголовка отсутствуют или
+        источник неразрешён — `403`. Access/refresh-аутентификация не требуется,
+        лимитер не применяется.
+      operationId: getCsrfToken
       security: []
       responses:
-        '403':
-          description: Отсутствует Origin или источник не входит в CORS_ORIGINS
         '200':
-          description: CSRF-токен выдан
+          description: Токен выдан
           headers:
             Set-Cookie:
-              description: Cookie csrf_token (не HttpOnly), Path=/api/v1/, срок действия 1 час
-              schema:
-                type: string
+              $ref: '#/components/headers/SetCookieCsrf'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
-                type: object
-                required: [csrf_token]
-                properties:
-                  csrf_token:
-                    type: string
+                $ref: '#/components/schemas/CsrfTokenResponse'
+              example:
+                csrf_token: 9J2x...KfQ.uV1h...z3A
+        '403':
+          description: Отсутствует или неразрешён источник запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: FORBIDDEN
+                message: Недопустимый Origin
         '500':
           description: Не удалось сгенерировать CSRF-токен
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось подготовить CSRF-защиту запроса
   /register:
     post:
-      tags:
-        - Auth
-      summary: Регистрация стандартного пользователя
-      description: Создает пользователя с ролью `user`. Не требует access/refresh-аутентификации, но требует CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
+      tags: [Auth]
+      summary: Регистрация обычного пользователя
+      description: |
+        Создаёт пользователя с ролью `user` и статусом `active`. Требует CSRF
+        (cookie `csrf_token` + `X-CSRF-Token`) и разрешённый Origin/Referer.
+        Лимитер — 10 запросов в час на IP. Пароль хешируется bcrypt (DefaultCost).
+        Cookie при регистрации не устанавливаются.
+      operationId: registerUser
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: ada@example.com
+              password: a-long-password
+              first_name: Ada
+              last_name: Lovelace
+      responses:
+        '201':
+          description: Пользователь создан
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /register-admin:
+    post:
+      tags: [Auth]
+      summary: Регистрация администратора по секрету
+      description: |
+        Создаёт пользователя с ролью `admin`. Секрет передаётся **только** в заголовке
+        `X-Admin-Token` (значение `ADMIN_REGISTER_TOKEN`) и сравнивается constant-time.
+        Порядок проверок: сначала валидация полей (`400`), затем секрет (`403`).
+        Требует CSRF и разрешённый Origin/Referer; лимитер — 10 запросов в час на IP.
+      operationId: registerAdmin
+      security: []
+      parameters:
+        - in: header
+          name: X-Admin-Token
+          required: false
+          description: |
+            Секрет регистрации администраторов. Отсутствие или несовпадение дают `403`
+            («Доступ к данному контуру ограничен»).
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -311,78 +843,62 @@ paths:
               $ref: '#/components/schemas/RegisterRequest'
       responses:
         '201':
-          description: Пользователь создан
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/CacheControl'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-        '400':
-          description: Ошибка валидации
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Email уже зарегистрирован
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-  /register-admin:
-    post:
-      tags:
-        - Auth
-      summary: Регистрация администратора
-      description: |
-        Создает пользователя с ролью `admin`. Требуется секретный токен регистрации администратора 
-        в заголовке `X-Admin-Token`. Не требует access/refresh-аутентификации, но требует CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
-      security: []
-      parameters:
-        - in: header
-          name: X-Admin-Token
-          required: false
-          schema:
-            type: string
-          description: Секретный токен регистрации администратора.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterAdminRequest'
-      responses:
-        '201':
           description: Администратор создан
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+              example:
+                id: 5f0c7c2e-6b1a-4f3d-9a1d-2c7b6a5e4d31
+                email: root@example.com
+                role: admin
+                status: active
+                first_name: Grace
+                last_name: Hopper
+                created_at: "2026-01-01T00:00:00Z"
+                updated_at: "2026-01-01T00:00:00Z"
         '400':
-          description: Ошибка валидации
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '403':
-          description: Неверный токен регистрации администратора
+          description: |
+            `403 FORBIDDEN` — неверный `X-Admin-Token`
+            («Доступ к данному контуру ограничен») либо ошибка CSRF/Origin.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: FORBIDDEN
+                message: Доступ к данному контуру ограничен
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /login:
     post:
-      tags:
-        - Auth
-      summary: Вход в систему (любая роль)
+      tags: [Auth]
+      summary: Вход в систему
       description: |
-        Проверяет учетные данные и устанавливает HttpOnly куки `access_token` и `refresh_token`.
-        Клиентский JavaScript не может прочитать access/refresh-cookie. Используйте `credentials: include` на фронтенде. Перед запросом получите CSRF-токен через `GET /csrf` и передайте его в `X-CSRF-Token`; запрос также должен содержать разрешённый Origin/Referer.
+        Проверяет учётные данные (bcrypt, с защитой от timing-атак через фиктивный хеш),
+        убеждается что пользователь активен, выпускает JWT-пару и сохраняет SHA-256 хеш
+        refresh-токена в БД. При успехе устанавливает HttpOnly cookie `access_token`
+        и `refresh_token`. Требует CSRF и разрешённый Origin/Referer.
+        Лимитеры: 10 запросов за 15 минут на IP+email и 10 запросов за час на email;
+        счётчик растёт на любом запросе, включая успешный вход.
+        Неверные учётные данные и несуществующий пользователь дают одинаковый `401`.
+      operationId: login
       security: []
       requestBody:
         required: true
@@ -390,105 +906,204 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: ada@example.com
+              password: a-long-password
       responses:
         '200':
-          description: Вход выполнен; куки установлены
+          description: Вход выполнен, cookie установлены
           headers:
             Set-Cookie:
-              description: HttpOnly куки access_token и refresh_token
-              schema:
-                type: string
+              $ref: '#/components/headers/SetCookieAuth'
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - message
-                  - user
-                properties:
-                  message:
-                    type: string
-                    example: Авторизация успешна
-                  user:
-                    $ref: '#/components/schemas/User'
+                $ref: '#/components/schemas/LoginResponse'
         '400':
-          description: Ошибка валидации
+          description: |
+            `400 VALIDATION_FAILED` — некорректный JSON/неизвестные поля/превышение
+            тела, либо email > 255 символов или пароль > 72 байт
+            (в этом случае сообщение «Некорректное тело JSON»).
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: VALIDATION_FAILED
+                message: Некорректное тело JSON
         '401':
-          description: Неверный email или пароль
+          description: Неверные учётные данные или вход запрещён (пользователь неактивен/удалён)
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: UNAUTHORIZED
+                message: Неверные данные авторизации (email или пароль)
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Не удалось выпустить токены или сохранить refresh-токен
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось выпустить токены
         '503':
-          description: Временная недоступность хранилища аутентификации или лимитера
+          description: БД недоступна при поиске пользователя или при ошибке/некорректной конфигурации лимитера
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: SERVICE_UNAVAILABLE
+                message: Проверка авторизации временно недоступна
   /refresh:
     post:
-      tags:
-        - Auth
-      summary: Ротация токенов доступа и обновления
+      tags: [Auth]
+      summary: Ротация access/refresh токенов
       description: |
-        **Требуется кука `refresh_token`.** Проверяет JWT и наличие токена в БД, атомарно отзывает старый токен и выпускает новую пару cookie. Требуются CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
+        **Требуется cookie `refresh_token`** (заголовок `Authorization` не используется).
+        Сервер проверяет JWT (тип `refresh`), затем в транзакцииатомарно отзывает старый
+        токен по его SHA-256 хешу, проверяет активность пользователя (`FOR UPDATE`)
+        и записывает новый хеш. При успехе устанавливает новую пару cookie.
+        Любой отказ (пустая/невалидная/просроченная cookie, unknown hash, replay,
+        неактивный пользователь) приводит к сбросу auth-cookie и `401`.
+        Replay отзывает все сессии пользователя. Требуются CSRF и разрешённый Origin/Referer.
+        Лимитер — 30 запросов в минуту по хешу cookie (по IP, если cookie нет).
+      operationId: refreshTokens
       security:
         - refreshCookie: []
       responses:
         '200':
-          description: Новые куки установлены
+          description: Новые cookie установлены
           headers:
             Set-Cookie:
-              description: HttpOnly куки access_token и refresh_token
-              schema:
-                type: string
+              $ref: '#/components/headers/SetCookieAuth'
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Message'
+                $ref: '#/components/schemas/RefreshResponse'
+              example:
+                message: Токены обновлены
         '401':
-          description: Отсутствует, истек срок действия или отозван токен обновления
+          description: |
+            Refresh-токен отсутствует, недействителен, просрочен, отозван (replay)
+            или принадлежит неактивому/удалённому пользователю. Auth-cookie сброшены.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetCookieCleared'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: UNAUTHORIZED
+                message: Недействительный или просроченный Refresh-токен
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка ротации токенов (cookie при этом сброшены)
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetCookieCleared'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось выпустить токены
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /logout:
     post:
-      tags:
-        - Auth
+      tags: [Auth]
       summary: Выход из системы
       description: |
-        Очищает cookie токенов (устанавливает истекшие Set-Cookie). Если cookie `refresh_token` присутствует, отзывает токен на сервере. Refresh-cookie необязательна для самого вызова; требуются CSRF-cookie, заголовок `X-CSRF-Token` и разрешённый Origin/Referer.
+        Очищает cookie `access_token` и `refresh_token`. Если cookie `refresh_token`
+        присутствует, отзывает соответствующий токен в БД; без cookie вызов всё равно
+        завершается `200` (ничего не отзывается). Требуются CSRF и разрешённый Origin/Referer.
+        Лимитер — 10 запросов в минуту на IP.
+      operationId: logout
       security:
         - refreshCookie: []
       responses:
         '200':
-          description: Выход выполнен
+          description: Выход выполнен, cookie очищены
           headers:
             Set-Cookie:
-              description: Истекшие куки access_token и refresh_token для удаления
-              schema:
-                type: string
+              $ref: '#/components/headers/SetCookieCleared'
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Message'
+                $ref: '#/components/schemas/LogoutResponse'
+              example:
+                message: Вышли из системы
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: |
+            Не удалось отозвать refresh-токен в БД. Auth-cookie всё равно очищаются.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetCookieCleared'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось завершить сессию. Повторите попытку позже
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /users/me:
     get:
-      tags:
-        - Users
-      summary: Получение собственного профиля
-      description: Требуется кука `access_token`. Доступно ролям `user` и `admin`.
+      tags: [Users]
+      summary: Профиль текущего пользователя
+      description: |
+        Требует валидную cookie `access_token` и активный аккаунт; доступен ролям
+        `user` и `admin`. Возвращает актуальную запись из БД (роль и статус тоже читаются
+        из БД). Дополнительно действует общий лимитер авторизованных запросов —
+        600 запросов в минуту на пользователя.
+      operationId: getMe
       security:
         - cookieAuth: []
       responses:
@@ -496,22 +1111,49 @@ paths:
           description: Текущий пользователь
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '401':
-          description: Отсутствует или неверна кука токена доступа
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            `403 FORBIDDEN` («Недостаточно прав») — только если роль в контексте запроса
+            не `user` и не `admin`; на практике недостижимо при текущих значениях роли в БД.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '404':
+          description: Пользователь не найден (аккаунт удалён после прохождения middleware)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка чтения пользователя из БД
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось получить пользователя
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     put:
-      tags:
-        - Users
+      tags: [Users]
       summary: Полная замена собственного профиля
-      description: Доступно авторизованным пользователям. Роль и статус изменять через этот эндпоинт нельзя.
+      description: |
+        Заменяет email, имя и фамилию текущего пользователя. Роль и статус изменить нельзя;
+        поля `password`, `role`, `status` в теле не принимаются (неизвестные поля → `400`).
+        `updated_at` обновляется только при фактическом изменении значений.
+        Требуются CSRF и разрешённый Origin/Referer.
+      operationId: replaceMe
       security:
         - cookieAuth: []
       requestBody:
@@ -520,39 +1162,58 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateMeRequest'
+            example:
+              email: ada.lovelace@example.com
+              first_name: Ada
+              last_name: Lovelace-Byron
       responses:
         '200':
-          description: Профиль обновлен
+          description: Профиль обновлён
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '400':
-          description: Ошибка валидации
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Пользователь не найден
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Email уже используется
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка обновления профиля
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось обновить пользователя
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     patch:
-      tags:
-        - Users
+      tags: [Users]
       summary: Частичное обновление собственного профиля
-      description: Обновляет только переданные поля; роль и статус недоступны для изменения.
+      description: |
+        Обновляет переданные поля (`email`, `first_name`, `last_name`). Пустое тело
+        или тело без одного из этих полей даёт `400` («Пустые данные обновления»,
+        `details.body = ["Укажите хотя бы одно поле"]`). Роль и статус недоступны.
+        Требуются CSRF и разрешённый Origin/Referer.
+      operationId: patchMe
       security:
         - cookieAuth: []
       requestBody:
@@ -561,108 +1222,134 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PatchMeRequest'
+            example:
+              first_name: Ada King
       responses:
         '200':
-          description: Профиль обновлен
+          description: Профиль обновлён
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '400':
-          description: Ошибка валидации или не переданы поля для обновления
+          description: |
+            `400 VALIDATION_FAILED` — пустое тело обновления, пустые/невалидные значения
+            полей или неизвестные поля.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: VALIDATION_FAILED
+                message: Пустые данные обновления
+                details:
+                  body: ["Укажите хотя бы одно поле"]
         '401':
-          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Пользователь не найден
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Email уже используется
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка обновления профиля
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /users:
     get:
-      tags:
-        - Users
-      summary: Список всех пользователей
-      description: Требуется кука `access_token`. Только роль `admin`.
+      tags: [Users]
+      summary: Список пользователей (админ)
+      description: |
+        Только роль `admin`. Сортировка — `created_at ASC`. Фильтры и пагинация описаны
+        в параметрах; значения `role`/`status` нормализуются (trim + lowercase).
+        Требуются cookie `access_token`, CSRF не нужен (метод GET), действует общий
+        лимитер авторизованных запросов.
+      operationId: listUsers
       security:
         - cookieAuth: []
       parameters:
-        - in: query
-          name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Номер страницы
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 10
-          description: Количество элементов на странице
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Поиск по email, имени и фамилии
-        - in: query
-          name: role
-          schema:
-            type: string
-            enum: [user, admin]
-          description: Фильтр по роли
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [active, inactive]
-          description: Фильтр по статусу
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/RoleFilter'
+        - $ref: '#/components/parameters/StatusFilter'
       responses:
         '200':
           description: Страница пользователей
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserListResponse'
+              example:
+                items:
+                  - id: 5f0c7c2e-6b1a-4f3d-9a1d-2c7b6a5e4d31
+                    email: ada@example.com
+                    role: user
+                    status: active
+                    first_name: Ada
+                    last_name: Lovelace
+                    created_at: "2026-01-01T00:00:00Z"
+                    updated_at: "2026-01-01T00:00:00Z"
+                page: 1
+                limit: 10
+                total: 1
+                total_pages: 1
         '400':
-          description: Ошибка валидации параметров запроса
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Отсутствует или неверна кука токена доступа
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Не администратор
+          description: Роль в БД не `admin`
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: FORBIDDEN
+                message: Недостаточно прав
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка чтения списка пользователей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось получить список пользователей
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     post:
-      tags:
-        - Users
-      summary: Создание пользователя администратором
-      description: Требуется кука `access_token`. Только роль `admin`. Новый пользователь получает статус `active`.
+      tags: [Users]
+      summary: Создание пользователя (админ)
+      description: |
+        Только роль `admin`. Создаёт пользователя с указанной ролью (`user` по умолчанию)
+        и статусом `active`. Пароль хешируется bcrypt. Требуются CSRF и разрешённый
+        Origin/Referer, а также cookie `access_token`.
+      operationId: createUser
       security:
         - cookieAuth: []
       requestBody:
@@ -671,54 +1358,53 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateUserRequest'
+            example:
+              email: new.user@example.com
+              password: a-long-password
+              first_name: Alan
+              last_name: Turing
+              role: user
       responses:
         '201':
           description: Пользователь создан
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '400':
-          description: Ошибка валидации
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Не авторизован
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Не администратор
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Forbidden'
         '409':
-          description: Email уже используется
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка хеширования пароля или создания пользователя
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось создать пользователя
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /users/{id}:
     parameters:
-      - in: path
-        name: id
-        required: true
-        schema:
-          type: string
-          format: uuid
-        description: UUID пользователя
+      - $ref: '#/components/parameters/UserId'
     get:
-      tags:
-        - Users
-      summary: Получение пользователя по ID
-      description: Требуется кука `access_token`. Только роль `admin`.
+      tags: [Users]
+      summary: Получение пользователя по ID (админ)
+      description: Только роль `admin`. Метод GET, CSRF не требуется.
+      operationId: getUserById
       security:
         - cookieAuth: []
       responses:
@@ -726,7 +1412,7 @@ paths:
           description: Пользователь
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
@@ -737,29 +1423,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: VALIDATION_FAILED
+                message: Неверный идентификатор пользователя
         '401':
-          description: Отсутствует или неверна кука токена доступа
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Не администратор
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Forbidden'
         '404':
-          description: Пользователь не найден
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка чтения пользователя
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     put:
-      tags:
-        - Users
-      summary: Полная замена данных пользователя
-      description: Требуется кука `access_token`. Только роль `admin`. Полная замена редактируемых данных. Существующая роль сохраняется; переданное поле `role` игнорируется.
+      tags: [Users]
+      summary: Полная замена данных пользователя (админ)
+      description: |
+        Только роль `admin`. Обязательны `email`, `password`, `first_name`, `last_name`,
+        `status`. Хеш пароля перезаписывается всегда. Существующая роль сохраняется:
+        принятое, но игнорируемое поле `role` не является способом повышения/понижения.
+        Сессии (refresh-токены) пользователя при этом **не** отзываются.
+        Требуются CSRF и разрешённый Origin/Referer.
+      operationId: replaceUser
       security:
         - cookieAuth: []
       requestBody:
@@ -768,51 +1460,53 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateUserRequest'
+            example:
+              email: alan@example.com
+              password: another-long-password
+              first_name: Alan
+              last_name: Turing
+              status: active
       responses:
         '200':
           description: Данные пользователя обновлены
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '400':
-          description: Ошибка валидации
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Отсутствует или неверна кука токена доступа
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Не администратор
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Forbidden'
         '404':
-          description: Пользователь не найден
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
         '409':
-          description: Email уже используется
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка хеширования пароля или обновления пользователя
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     patch:
-      tags:
-        - Users
-      summary: Частичное обновление данных пользователя
-      description: Требуется кука `access_token`. Только роль `admin`. Обновляет только переданные поля. Существующая роль сохраняется; переданное поле `role` игнорируется.
+      tags: [Users]
+      summary: Частичное обновление данных пользователя (админ)
+      description: |
+        Только роль `admin`. Допустимы `email`, `password`, `first_name`, `last_name`,
+        `status`; нужно передать хотя бы одно поле. Поле `role` игнорируется.
+        При смене пароля все refresh-токены пользователя отзываются (ошибка отзыва
+        только логируется и не меняет успешный ответ). Требуются CSRF и разрешённый Origin/Referer.
+      operationId: patchUser
       security:
         - cookieAuth: []
       requestBody:
@@ -821,58 +1515,72 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PatchUserRequest'
+            example:
+              status: inactive
       responses:
         '200':
           description: Данные пользователя обновлены
           headers:
             Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
         '400':
-          description: Ошибка валидации
+          description: |
+            `400 VALIDATION_FAILED` — пустое тело обновления, невалидное значение поля
+            или недопустимый `status`.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: VALIDATION_FAILED
+                message: Недопустимое значение параметра
+                details:
+                  status: ["Допустимые значения: active, inactive"]
         '401':
-          description: Отсутствует или неверна кука токена доступа
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Не администратор
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Forbidden'
         '404':
-          description: Пользователь не найден
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
         '409':
-          description: Email уже используется
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка хеширования пароля или обновления пользователя
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     delete:
-      tags:
-        - Users
-      summary: Удаление пользователя
+      tags: [Users]
+      summary: Удаление пользователя (админ)
       description: |
-        Требуется кука `access_token`. Только роль `admin`. 
-        Удаление запрещено, если целевая учетная запись принадлежит администратору или совпадает с учетной записью текущего администратора.
+        Только роль `admin`. Нельзя удалить собственную учётную запись (`403`,
+        «Администратор не может удалить собственную учетную запись») и любой аккаунт
+        с ролью `admin` (`403`, «Нельзя удалить учетную запись администратора» —
+        репозиторий возвращает `domain.ErrProtected`). Каскадно удаляются refresh-токены
+        пользователя. Требуются CSRF и разрешённый Origin/Referer.
+      operationId: deleteUser
       security:
         - cookieAuth: []
       responses:
         '204':
-          description: Пользователь успешно удален
+          description: Пользователь удалён (тело ответа отсутствует)
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
         '400':
           description: Неверный формат UUID
           content:
@@ -880,20 +1588,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Отсутствует или неверна кука токена доступа
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Недостаточно прав или удаление запрещено (нельзя удалить себя или другого администратора)
+          description: Недостаточно прав либо удаление защищённой учётной записи
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: FORBIDDEN
+                message: Нельзя удалить учетную запись администратора
         '404':
-          description: Пользователь не найден
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка удаления пользователя
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось удалить пользователя
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
