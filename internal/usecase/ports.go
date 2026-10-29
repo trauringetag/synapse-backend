@@ -1,4 +1,4 @@
-package handler
+package usecase
 
 import (
 	"context"
@@ -10,7 +10,9 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/domain/models"
 )
 
-type UserStore interface {
+// UserRepository — порт хранилища пользователей, необходимый слою use-case.
+// Инфраструктурная реализация — internal/infrastructure/persistence.UserRepository.
+type UserRepository interface {
 	Create(ctx context.Context, email, passwordHash, role, firstName, lastName string) (*models.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*models.User, error)
 	GetByEmail(ctx context.Context, email string) (*models.User, error)
@@ -21,7 +23,9 @@ type UserStore interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-type TokenStore interface {
+// TokenRepository — порт хранилища refresh-токенов.
+// Инфраструктурная реализация — internal/infrastructure/persistence.TokenRepository.
+type TokenRepository interface {
 	Store(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error
 	Rotate(ctx context.Context, oldHash string, expectedUserID uuid.UUID, createSuccessor func(*models.User) (string, time.Time, error)) (*models.User, error)
 	Revoke(ctx context.Context, tokenHash string) error

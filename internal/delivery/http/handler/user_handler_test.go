@@ -34,7 +34,7 @@ func nilCtx() context.Context { return context.Background() }
 // newUserHandler собирает хендлер пользователей на свежем моке.
 func newUserHandler() (*UserHandler, *mockStore) {
 	store := newMockStore()
-	return NewUserHandler(store, store), store
+	return NewUserHandler(newUserUC(store)), store
 }
 
 // asPrincipal превращает пользователя в Principal из middleware.
@@ -882,7 +882,7 @@ func TestDelete(t *testing.T) {
 func TestRBAC_AdminEndpoints(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewUserHandler(store, store)
+	h := NewUserHandler(newUserUC(store))
 
 	user := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 	admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
@@ -926,7 +926,7 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 func TestRBAC_IDOR(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewUserHandler(store, store)
+	h := NewUserHandler(newUserUC(store))
 
 	user := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 	victim := seedUser(t, store, "victim@example.com", "StrongPass123", models.RoleUser)
@@ -965,8 +965,8 @@ func TestRBAC_IDOR(t *testing.T) {
 func TestAdminFullFlow(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	authH := NewAuthHandler(cfg, store, store)
-	userH := NewUserHandler(store, store)
+	authH := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	userH := NewUserHandler(newUserUC(store))
 	admin := seedUser(t, store, "admin@example.com", "StrongPass123", models.RoleAdmin)
 	adminPair, _ := auth.IssuePair(cfg, admin.ID, admin.Email, admin.Role)
 

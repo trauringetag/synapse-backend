@@ -11,6 +11,7 @@ import (
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
 	"github.com/trauringetag/synapse-backend/internal/domain/models"
+	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 // mockStore — потокобезопасное in-memory хранилище, реализующее интерфейсы
@@ -283,8 +284,8 @@ func (s *mockStore) RevokeAllForUser(ctx context.Context, userID uuid.UUID) erro
 	return nil
 }
 
-// Компиляционная проверка соответствия мока интерфейсам хендлеров.
+// Компиляционная проверка соответствия мока портам use-case слоя.
 var (
-	_ UserStore  = (*mockStore)(nil)
-	_ TokenStore = (*mockStore)(nil)
+	_ usecase.UserRepository  = (*mockStore)(nil)
+	_ usecase.TokenRepository = (*mockStore)(nil)
 )

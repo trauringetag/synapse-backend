@@ -1,28 +1,30 @@
 package handler
 
+// Тонкий HTTP-слой управления пользователями: обработчики только разбирают
+// запрос (тело, query, path-параметры, контекст аутентификации), вызывают
+// метод use-case и формируют HTTP-ответ. Валидация полей, нормализация,
+// хеширование паролей, проверка ролей/статусов и отзыв сессий — в internal/usecase.
+
 import (
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
 	"github.com/trauringetag/synapse-backend/internal/domain"
-	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	"github.com/trauringetag/synapse-backend/internal/messages"
+	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 type UserHandler struct {
-	users  UserStore
-	tokens TokenStore
+	uc usecase.UserUseCase
 }
 
-func NewUserHandler(users UserStore, tokens TokenStore) *UserHandler {
-	return &UserHandler{users: users, tokens: tokens}
+func NewUserHandler(uc usecase.UserUseCase) *UserHandler {
+	return &UserHandler{uc: uc}
 }
 
 type putUserRequest struct {
@@ -48,9 +50,9 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 		return
 	}
-	user, err := h.users.GetByID(r.Context(), p.ID)
+	user, err := h.uc.GetMe(r.Context(), p.ID)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, user)
@@ -79,24 +81,15 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, messages.InvalidPageLimitParams, validationErrors)
 		return
 	}
-	role := strings.ToLower(strings.TrimSpace(q.Get("role")))
-	if role != "" && role != models.RoleUser && role != models.RoleAdmin {
-		response.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
-		return
-	}
-	status := strings.ToLower(strings.TrimSpace(q.Get("status")))
-	if status != "" && status != models.StatusActive && status != models.StatusInactive {
-		response.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"status": {messages.StatusInvalidValue}})
-		return
-	}
-	search := strings.TrimSpace(q.Get("search"))
-	if len(search) > 200 {
-		response.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, nil)
-		return
-	}
-	result, err := h.users.List(r.Context(), domain.UserListFilter{Page: page, Limit: limit, Search: search, Role: role, Status: status})
+	result, err := h.uc.List(r.Context(), usecase.ListUsersInput{
+		Page:   page,
+		Limit:  limit,
+		Search: strings.TrimSpace(q.Get("search")),
+		Role:   strings.TrimSpace(q.Get("role")),
+		Status: strings.TrimSpace(q.Get("status")),
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToGetUsersList, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, result)
@@ -108,37 +101,15 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	first := strings.TrimSpace(req.FirstName)
-	last := strings.TrimSpace(req.LastName)
-	role := strings.ToLower(strings.TrimSpace(req.Role))
-	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" || (len(req.Password) < 8 || len(req.Password) > 72) {
-		response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
-			"email":      {messages.InvalidEmail},
-			"first_name": {messages.FirstNameRequired},
-			"last_name":  {messages.LastNameRequired},
-			"password":   {messages.PasswordTooShort}})
-		return
-	}
-	if role == "" {
-		role = models.RoleUser
-	}
-	if role != models.RoleUser && role != models.RoleAdmin {
-		response.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	user, err := h.uc.Create(r.Context(), usecase.CreateUserInput{
+		Email:     req.Email,
+		Password:  req.Password,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Role:      req.Role,
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
-		return
-	}
-	user, err := h.users.Create(r.Context(), email, string(hash), role, first, last)
-	if err == domain.ErrConflict {
-		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
-		return
-	}
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToCreateUser, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusCreated, user)
@@ -159,25 +130,14 @@ func (h *UserHandler) PutMe(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	email, first, last := strings.ToLower(strings.TrimSpace(req.Email)), strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName)
-	if email == "" || !strings.Contains(email, "@") || first == "" || last == "" {
-		response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{
-			"email":      {messages.InvalidEmail},
-			"first_name": {messages.FirstNameRequired},
-			"last_name":  {messages.LastNameRequired}})
-		return
-	}
-	user, err := h.users.ReplaceProfile(r.Context(), p.ID, email, first, last)
-	if err == domain.ErrConflict {
-		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
-		return
-	}
-	if err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	}
+	user, err := h.uc.ReplaceProfile(r.Context(), usecase.ReplaceProfileInput{
+		UserID:    p.ID,
+		Email:     req.Email,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToUpdateUser, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, user)
@@ -198,46 +158,14 @@ func (h *UserHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	if req.Email == nil && req.FirstName == nil && req.LastName == nil {
-		response.Error(w, http.StatusBadRequest, messages.EmptyUpdateData, map[string][]string{"body": {messages.SpecifyAtLeastOneField}})
-		return
-	}
-	var email, first, last *string
-	if req.Email != nil {
-		v := strings.ToLower(strings.TrimSpace(*req.Email))
-		if v == "" || !strings.Contains(v, "@") {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"email": {messages.InvalidEmail}})
-			return
-		}
-		email = &v
-	}
-	if req.FirstName != nil {
-		v := strings.TrimSpace(*req.FirstName)
-		if v == "" {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"first_name": {messages.FirstNameRequired}})
-			return
-		}
-		first = &v
-	}
-	if req.LastName != nil {
-		v := strings.TrimSpace(*req.LastName)
-		if v == "" {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"last_name": {messages.LastNameRequired}})
-			return
-		}
-		last = &v
-	}
-	user, err := h.users.Update(r.Context(), p.ID, email, first, last, nil, nil)
-	if err == domain.ErrConflict {
-		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
-		return
-	}
-	if err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	}
+	user, err := h.uc.UpdateOwnProfile(r.Context(), usecase.UpdateOwnProfileInput{
+		UserID:    p.ID,
+		Email:     req.Email,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToUpdateUser, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, user)
@@ -249,13 +177,9 @@ func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, messages.InvalidUserID, nil)
 		return
 	}
-	user, err := h.users.GetByID(r.Context(), id)
-	if err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	}
+	user, err := h.uc.GetByID(r.Context(), id)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToGetUser, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, user)
@@ -272,46 +196,16 @@ func (h *UserHandler) Put(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	firstName := strings.TrimSpace(req.FirstName)
-	lastName := strings.TrimSpace(req.LastName)
-	status := strings.ToLower(strings.TrimSpace(req.Status))
-	errors := make(map[string][]string)
-	if email == "" || !strings.Contains(email, "@") {
-		errors["email"] = []string{messages.InvalidEmail}
-	}
-	if len(req.Password) < 8 || len(req.Password) > 72 {
-		errors["password"] = []string{messages.PasswordTooShort}
-	}
-	if firstName == "" {
-		errors["first_name"] = []string{messages.FirstNameRequired}
-	}
-	if lastName == "" {
-		errors["last_name"] = []string{messages.LastNameRequired}
-	}
-	if status != models.StatusActive && status != models.StatusInactive {
-		errors["status"] = []string{messages.StatusInvalidValue}
-	}
-	if len(errors) > 0 {
-		response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, errors)
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	user, err := h.uc.AdminReplace(r.Context(), usecase.AdminReplaceUserInput{
+		ID:        id,
+		Email:     req.Email,
+		Password:  req.Password,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Status:    req.Status,
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
-		return
-	}
-	user, err := h.users.Replace(r.Context(), id, email, firstName, lastName, string(hash), status)
-	if err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	}
-	if err == domain.ErrConflict {
-		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
-		return
-	}
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToUpdateUser, nil)
+		respondError(w, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, user)
@@ -328,69 +222,17 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	var email, firstName, lastName, passwordHash, status *string
-	if req.Email != nil {
-		v := strings.ToLower(strings.TrimSpace(*req.Email))
-		if v == "" || !strings.Contains(v, "@") {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"email": {messages.InvalidEmail}})
-			return
-		}
-		email = &v
-	}
-	if req.FirstName != nil {
-		v := strings.TrimSpace(*req.FirstName)
-		if v == "" {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"first_name": {messages.FirstNameRequired}})
-			return
-		}
-		firstName = &v
-	}
-	if req.LastName != nil {
-		v := strings.TrimSpace(*req.LastName)
-		if v == "" {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"last_name": {messages.LastNameRequired}})
-			return
-		}
-		lastName = &v
-	}
-	if req.Status != nil {
-		v := strings.ToLower(strings.TrimSpace(*req.Status))
-		if v != models.StatusActive && v != models.StatusInactive {
-			response.Error(w, http.StatusBadRequest, messages.InvalidParameterValue, map[string][]string{"status": {messages.StatusInvalidValue}})
-			return
-		}
-		status = &v
-	}
-	if req.Password != nil {
-		if len(*req.Password) < 8 || len(*req.Password) > 72 {
-			response.Error(w, http.StatusBadRequest, messages.CheckRequiredFields, map[string][]string{"password": {messages.PasswordTooShort}})
-			return
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
-		if err != nil {
-			response.Error(w, http.StatusInternalServerError, messages.FailedToHashPassword, nil)
-			return
-		}
-		s := string(hash)
-		passwordHash = &s
-	}
-	user, err := h.users.Update(r.Context(), id, email, firstName, lastName, passwordHash, status)
-	if err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	}
-	if err == domain.ErrConflict {
-		response.Error(w, http.StatusConflict, messages.EmailAlreadyUsed, nil)
-		return
-	}
+	user, err := h.uc.AdminUpdate(r.Context(), usecase.AdminUpdateUserInput{
+		ID:        id,
+		Email:     req.Email,
+		Password:  req.Password,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Status:    req.Status,
+	})
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToUpdateUser, nil)
+		respondError(w, err)
 		return
-	}
-	if passwordHash != nil {
-		if revokeErr := h.tokens.RevokeAllForUser(r.Context(), id); revokeErr != nil {
-			log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", id.String(), revokeErr)
-		}
 	}
 	response.JSON(w, http.StatusOK, user)
 }
@@ -401,25 +243,16 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, messages.InvalidUserID, nil)
 		return
 	}
-
 	principal, ok := middleware.FromContext(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
 		return
 	}
-	if principal.ID == id {
-		response.Error(w, http.StatusForbidden, messages.AdminCannotDeleteSelf, nil)
-		return
-	}
-
-	if err := h.users.Delete(r.Context(), id); err == domain.ErrNotFound {
-		response.Error(w, http.StatusNotFound, messages.UserNotFound, nil)
-		return
-	} else if err == domain.ErrProtected {
-		response.Error(w, http.StatusForbidden, messages.CannotDeleteAdminAccount, nil)
-		return
-	} else if err != nil {
-		response.Error(w, http.StatusInternalServerError, messages.FailedToDeleteUser, nil)
+	if err := h.uc.Delete(r.Context(), usecase.DeleteUserInput{
+		TargetID:    id,
+		PrincipalID: principal.ID,
+	}); err != nil {
+		respondError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

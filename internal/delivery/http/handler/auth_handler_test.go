@@ -23,6 +23,7 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
+	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 // testConfig возвращает конфигурацию, единую для всех тестов пакета.
@@ -103,7 +104,7 @@ func validRegBody() map[string]string {
 // TestRegister_Success проверяет успешную регистрацию: нормализацию email,
 // роль по умолчанию и отсутствие bcrypt-хеша в ответе.
 func TestRegister_Success(t *testing.T) {
-	h := NewAuthHandler(testConfig(), newMockStore(), newMockStore())
+	h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), newMockStore()))
 
 	body := validRegBody()
 	body["email"] = "  NewUser@Example.COM  " // пробелы и верхний регистр
@@ -161,7 +162,7 @@ func TestRegister_ValidationErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewAuthHandler(testConfig(), newMockStore(), newMockStore())
+			h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), newMockStore()))
 
 			var req *http.Request
 			if tt.mutate != nil {
@@ -199,7 +200,7 @@ func TestRegister_MassAssignmentBlocked(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewAuthHandler(testConfig(), newMockStore(), newMockStore())
+			h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), newMockStore()))
 			raw := `{"email":"u@example.com","password":"StrongPass123","first_name":"I","last_name":"P",` + tt.extra + `}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/register", strings.NewReader(raw))
 			req.Header.Set("Content-Type", "application/json")
@@ -217,7 +218,7 @@ func TestRegister_MassAssignmentBlocked(t *testing.T) {
 // TestRegister_DuplicateEmail — повторная регистрация на занятый email -> 409 Conflict.
 func TestRegister_DuplicateEmail(t *testing.T) {
 	store := newMockStore()
-	h := NewAuthHandler(testConfig(), store, store)
+	h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), store))
 
 	rec := httptest.NewRecorder()
 	h.Register(rec, postJSON("/api/v1/register", validRegBody()))
@@ -241,7 +242,7 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 func TestRegisterAdmin_Success(t *testing.T) {
 	store := newMockStore()
 	cfg := testConfig()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 
 	req := postJSON("/api/v1/register-admin", validRegBody())
 	req.Header.Set("X-Admin-Token", cfg.AdminRegisterToken)
@@ -275,7 +276,7 @@ func TestRegisterAdmin_Forbidden(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newMockStore()
 			cfg := testConfig()
-			h := NewAuthHandler(cfg, store, store)
+			h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 
 			req := postJSON("/api/v1/register-admin", validRegBody())
 			if tt.token != "" {
@@ -301,7 +302,7 @@ func TestRegisterAdmin_Forbidden(t *testing.T) {
 // admin-токена: битое тело дает 400 даже без токена (не раскрываем порядок проверок).
 func TestRegisterAdmin_ValidationRunsFirst(t *testing.T) {
 	store := newMockStore()
-	h := NewAuthHandler(testConfig(), store, store)
+	h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), store))
 
 	body := validRegBody()
 	body["password"] = "short"
@@ -338,7 +339,7 @@ func seedUser(t *testing.T, store *mockStore, email, password, role string) *mod
 func TestLogin_Success(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 
 	rec := httptest.NewRecorder()
@@ -405,7 +406,7 @@ func TestLogin_Success(t *testing.T) {
 func TestLogin_InvalidCredentials(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 	inactive := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
 	inactive.Status = models.StatusInactive
@@ -442,7 +443,7 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 // битый JSON -> 400.
 func TestLogin_BodyLimits(t *testing.T) {
 	store := newMockStore()
-	h := NewAuthHandler(testConfig(), store, store)
+	h := NewAuthHandler(testConfig(), newAuthUC(testConfig(), store))
 
 	tests := []struct {
 		name string
@@ -473,7 +474,7 @@ func TestLogin_BodyLimits(t *testing.T) {
 func TestLogin_TimingAttackProtection(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 
 	// Создаем пользователя с реальным bcrypt-хешем боевой стоимости.
 	realHash, err := bcrypt.GenerateFromPassword([]byte("CorrectPass123"), bcrypt.DefaultCost)
@@ -505,8 +506,8 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 	}
 
 	// Проверяем, что фейковый хеш валидный (иначе bcrypt не будет работать).
-	if len(dummyHash) < 50 || !strings.HasPrefix(string(dummyHash), "$2a$") {
-		t.Fatalf("DummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(dummyHash))
+	if len(usecase.DummyHash) < 50 || !strings.HasPrefix(string(usecase.DummyHash), "$2a$") {
+		t.Fatalf("DummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(usecase.DummyHash))
 	}
 
 	// Измеряем среднее время для обеих веток.
@@ -575,7 +576,7 @@ func refreshRequest(token string) *http.Request {
 func TestRefresh_Rotation(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 
 	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
@@ -614,7 +615,7 @@ func TestRefresh_Rotation(t *testing.T) {
 func TestRefresh_ReplayAttack(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 
 	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
@@ -659,7 +660,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 
 	t.Run("Отсутствует Cookie refresh_token", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest(""))
 		if rec.Code != http.StatusUnauthorized {
@@ -675,7 +676,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 
 	t.Run("Мусорный токен", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		rec := httptest.NewRecorder()
 		h.Refresh(rec, refreshRequest("not.a.jwt"))
 		if rec.Code != http.StatusUnauthorized {
@@ -685,7 +686,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 
 	t.Run("Access-токен вместо refresh (проверка audience)", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 		cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 
@@ -700,7 +701,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 		expCfg := testConfig()
 		expCfg.RefreshTTL = -time.Hour // токен родился уже просроченным
 		store := newMockStore()
-		h := NewAuthHandler(expCfg, store, store)
+		h := NewAuthHandler(expCfg, newAuthUC(expCfg, store))
 		u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 		pair, err := auth.IssuePair(expCfg, u.ID, u.Email, u.Role)
 		if err != nil {
@@ -716,7 +717,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 
 	t.Run("Валидный JWT, но неизвестный хранилищу токен", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		u := seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 		pair, _ := auth.IssuePair(cfg, u.ID, u.Email, u.Role) // в store не сохраняли
 
@@ -729,7 +730,7 @@ func TestRefresh_RejectCases(t *testing.T) {
 
 	t.Run("Refresh для заблокированного пользователя отзывает его сессии", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		u := seedUser(t, store, "blocked@example.com", "StrongPass123", models.RoleUser)
 		pair, _ := auth.IssuePair(cfg, u.ID, u.Email, u.Role)
 		_ = store.Store(nilCtx(), u.ID, auth.HashToken(pair.RefreshToken), pair.RefreshExp)
@@ -757,7 +758,7 @@ func TestLogout(t *testing.T) {
 
 	t.Run("Выход с активным refresh-токеном", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		seedUser(t, store, "user@example.com", "StrongPass123", models.RoleUser)
 		cm := loginCookies(t, h, "user@example.com", "StrongPass123")
 		refresh := cm[auth.RefreshCookie]
@@ -781,7 +782,7 @@ func TestLogout(t *testing.T) {
 
 	t.Run("Выход без Cookie также возвращает 200", func(t *testing.T) {
 		store := newMockStore()
-		h := NewAuthHandler(cfg, store, store)
+		h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 		rec := httptest.NewRecorder()
 		h.Logout(rec, httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil))
 		if rec.Code != http.StatusOK {
@@ -799,7 +800,7 @@ func TestLogout(t *testing.T) {
 func TestCSRFTokenEndpoint(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
 	req.Header.Set("Origin", "https://app.example")
@@ -836,7 +837,7 @@ func TestCSRFTokenEndpoint(t *testing.T) {
 func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewAuthHandler(cfg, store, store)
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
 	chain := middleware.CSRF(cfg)(http.HandlerFunc(h.Register))
 
 	t.Run("POST без CSRF-токена", func(t *testing.T) {
@@ -910,8 +911,8 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 func TestFullTokenLifecycle(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	authH := NewAuthHandler(cfg, store, store)
-	userH := NewUserHandler(store, store)
+	authH := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	userH := NewUserHandler(newUserUC(store))
 	const origin = "https://app.example"
 
 	// ШАГ 1. Получаем CSRF-токен (cookie + тело ответа).

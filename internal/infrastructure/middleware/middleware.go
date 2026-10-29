@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -285,7 +284,7 @@ func CSRF(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 			c, err := r.Cookie("csrf_token")
 			token := r.Header.Get("X-CSRF-Token")
-			if err != nil || token == "" || !validCSRF(cfg.JWTSecret, c.Value) || !hmac.Equal([]byte(token), []byte(c.Value)) {
+			if err != nil || token == "" || !auth.ValidCSRF(cfg.JWTSecret, c.Value) || !hmac.Equal([]byte(token), []byte(c.Value)) {
 				response.Error(w, http.StatusForbidden, messages.InvalidCSRFToken, nil)
 				return
 			}
@@ -293,29 +292,16 @@ func CSRF(cfg *config.Config) func(http.Handler) http.Handler {
 		})
 	}
 }
-func IssueCSRF(secret []byte) (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	nonce := base64.RawURLEncoding.EncodeToString(b)
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(nonce))
-	return nonce + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
-}
-func validCSRF(secret []byte, token string) bool {
-	p := strings.Split(token, ".")
-	if len(p) != 2 {
-		return false
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(p[1])
-	if err != nil {
-		return false
-	}
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(p[0]))
-	return hmac.Equal(sig, mac.Sum(nil))
-}
+
+// validCSRF — локальная обёртка над security.ValidCSRF для использования
+// в тестах middleware (проверка HMAC-подписи CSRF-токена).
+func validCSRF(secret []byte, token string) bool { return auth.ValidCSRF(secret, token) }
+
+// IssueCSRF — реэкспорт генератора CSRF-токенов из пакета security.
+// Реализация переехала в infrastructure/security (csrf.go), чтобы слой
+// use-case и HTTP-обработчики могли получать токен без цикла импортов
+// middleware -> security -> middleware.
+func IssueCSRF(secret []byte) (string, error) { return auth.IssueCSRF(secret) }
 
 func AccountGlobalKey(r *http.Request) string {
 	email := loginEmail(r)

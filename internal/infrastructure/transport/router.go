@@ -13,11 +13,25 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/handler"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
+	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
+	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
-func New(cfg *config.Config, users handler.UserStore, tokens handler.TokenStore, pool *pgxpool.Pool, openAPI []byte) http.Handler {
-	authH := handler.NewAuthHandler(cfg, users, tokens)
-	userH := handler.NewUserHandler(users, tokens)
+// New собирает HTTP-транспорт: инфраструктурные репозитории и сервисы
+// безопасности инъецируются в слой use-case, а use-case'ы — в тонкие
+// HTTP-обработчики (Dependency Injection).
+func New(cfg *config.Config, users usecase.UserRepository, tokens usecase.TokenRepository, pool *pgxpool.Pool, openAPI []byte) http.Handler {
+	authUC := usecase.NewAuthUseCase(
+		users,
+		tokens,
+		auth.NewJWTService(cfg),
+		auth.NewCSRFService(cfg),
+		cfg.AdminRegisterToken,
+	)
+	userUC := usecase.NewUserUseCase(users, tokens)
+
+	authH := handler.NewAuthHandler(cfg, authUC)
+	userH := handler.NewUserHandler(userUC)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
