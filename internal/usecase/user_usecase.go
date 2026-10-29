@@ -20,11 +20,12 @@ import (
 type UserUseCaseImpl struct {
 	users  UserRepository
 	tokens TokenRepository
+	hasher PasswordHasher // порт хеширования паролей (реализация — в инфраструктуре)
 }
 
 // NewUserUseCase собирает сценарии работы с пользователями через DI.
-func NewUserUseCase(users UserRepository, tokens TokenRepository) *UserUseCaseImpl {
-	return &UserUseCaseImpl{users: users, tokens: tokens}
+func NewUserUseCase(users UserRepository, tokens TokenRepository, hasher PasswordHasher) *UserUseCaseImpl {
+	return &UserUseCaseImpl{users: users, tokens: tokens, hasher: hasher}
 }
 
 var _ UserUseCase = (*UserUseCaseImpl)(nil)
@@ -87,7 +88,7 @@ func (uc *UserUseCaseImpl) List(ctx context.Context, in ListUsersInput) (*domain
 // ---------- Создание (админ) ----------
 
 // Create создает пользователя с указанной ролью (по умолчанию — user).
-// Пароль хешируется bcrypt; невалидная роль отклоняется.
+// Пароль хешируется через внедренный порт PasswordHasher; невалидная роль отклоняется.
 func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*models.User, error) {
 	email := normalizeEmail(in.Email)
 	first := normalizeName(in.FirstName)
@@ -109,7 +110,7 @@ func (uc *UserUseCaseImpl) Create(ctx context.Context, in CreateUserInput) (*mod
 		return nil, validationErr(messages.InvalidParameterValue, map[string][]string{"role": {messages.RoleInvalidValue}})
 	}
 
-	hash, err := bcryptHash(in.Password)
+	hash, err := uc.hasher.Hash(in.Password)
 	if err != nil {
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
 	}
@@ -223,7 +224,7 @@ func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUser
 		return nil, validationErr(messages.CheckRequiredFields, details)
 	}
 
-	hash, err := bcryptHash(in.Password)
+	hash, err := uc.hasher.Hash(in.Password)
 	if err != nil {
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
 	}
@@ -277,7 +278,7 @@ func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserIn
 		if !validPassword(*in.Password) {
 			return nil, validationErr(messages.CheckRequiredFields, map[string][]string{"password": {messages.PasswordTooShort}})
 		}
-		h, err := bcryptHash(*in.Password)
+		h, err := uc.hasher.Hash(*in.Password)
 		if err != nil {
 			return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
 		}

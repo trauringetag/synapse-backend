@@ -14,6 +14,7 @@ func newAuthUC(cfg *config.Config, store *mockStore) usecase.AuthUseCase {
 	return usecase.NewAuthUseCase(
 		store,
 		store,
+		auth.NewBcryptHasher(),
 		auth.NewJWTService(cfg),
 		auth.NewCSRFService(cfg),
 		cfg.AdminRegisterToken,
@@ -21,5 +22,5 @@ func newAuthUC(cfg *config.Config, store *mockStore) usecase.AuthUseCase {
 }
 
 func newUserUC(store *mockStore) usecase.UserUseCase {
-	return usecase.NewUserUseCase(store, store)
+	return usecase.NewUserUseCase(store, store, auth.NewBcryptHasher())
 }

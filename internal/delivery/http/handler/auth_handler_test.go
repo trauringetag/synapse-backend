@@ -21,9 +21,8 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/domain/models"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
-	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
+	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
-	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 // testConfig возвращает конфигурацию, единую для всех тестов пакета.
@@ -505,9 +504,16 @@ func TestLogin_TimingAttackProtection(t *testing.T) {
 		return total / iterations
 	}
 
-	// Проверяем, что фейковый хеш валидный (иначе bcrypt не будет работать).
-	if len(usecase.DummyHash) < 50 || !strings.HasPrefix(string(usecase.DummyHash), "$2a$") {
-		t.Fatalf("DummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", string(usecase.DummyHash))
+	// Проверяем, что фиктивный хеш валидный (иначе bcrypt не будет работать).
+	// DummyHash больше не экспортируется слоем use-case (bcrypt вынесен в
+	// инфраструктуру), поэтому проверяем эквивалентный хеш через тот же
+	// инфраструктурный PasswordHasher, который внедряется в AuthUseCase.
+	dummyHash, err := auth.NewBcryptHasher().Hash("dummy-password-for-timing-attack-protection")
+	if err != nil {
+		t.Fatalf("Хеширование dummy-пароля: %v", err)
+	}
+	if len(dummyHash) < 50 || !strings.HasPrefix(dummyHash, "$2a$") {
+		t.Fatalf("DummyHash невалиден: %q (должен быть валидным bcrypt-хешем)", dummyHash)
 	}
 
 	// Измеряем среднее время для обеих веток.

@@ -9,8 +9,6 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/google/uuid"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
@@ -18,23 +16,13 @@ import (
 	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
-// DummyHash используется для защиты от timing-атак при логине: если пользователь
-// не найден или неактивен, bcrypt всё равно выполняет сравнение с фиктивным
-// хешем, чтобы время ответа не выдавало существование учетной записи.
-// Экспортирован, чтобы unit-тесты HTTP-слоя могли проверить его валидность.
-var DummyHash []byte
-
-func init() {
-	hash, err := bcrypt.GenerateFromPassword(
-		[]byte("dummy-password-for-timing-attack-protection"),
-		bcrypt.DefaultCost,
-	)
-	if err != nil {
-		DummyHash = []byte("$2a$10$SomeHashThatWillNeverMatchAnyPassword12345678901234")
-	} else {
-		DummyHash = hash
-	}
-}
+// dummyPassword — пароль, хеш которого используется для защиты от timing-атак
+// при логине: если пользователь не найден или неактивен, hasher всё равно
+// выполняет сравнение с фиктивным хешем, чтобы время ответа не выдавало
+// существование учетной записи. Сам хеш вычисляется инфраструктурной
+// реализацией порта PasswordHasher (см. security.BcryptHasher), поэтому слой
+// use-case не зависит от конкретной библиотеки хеширования (Dependency Rule).
+const dummyPassword = "dummy-password-for-timing-attack-protection"
 
 // HashToken возвращает SHA-256 (hex) от токена — безопасное представление
 // refresh-токена для хранения. Хелпер продублирован здесь, чтобы слой
@@ -74,28 +62,42 @@ type CSRFIssuer interface {
 type AuthUseCaseImpl struct {
 	users      UserRepository
 	tokens     TokenRepository
+	hasher     PasswordHasher // порт хеширования паролей (реализация — в инфраструктуре)
 	issuer     TokenIssuer
 	csrf       CSRFIssuer
 	adminToken string
+	dummyHash  string // фиктивный хеш для защиты от timing-атак (вычисляется в конструкторе)
 }
 
 // NewAuthUseCase собирает сценарии аутентификации. Зависимости передаются явно
-// (DI): репозитории, генератор токенов, CSRF-генератор и секретный токен
-// админской регистрации.
+// (DI): репозитории, порт хеширования паролей, генератор токенов, CSRF-генератор
+// и секретный токен админской регистрации.
 func NewAuthUseCase(
 	users UserRepository,
 	tokens TokenRepository,
+	hasher PasswordHasher,
 	issuer TokenIssuer,
 	csrf CSRFIssuer,
 	adminRegisterToken string,
 ) *AuthUseCaseImpl {
-	return &AuthUseCaseImpl{
+	uc := &AuthUseCaseImpl{
 		users:      users,
 		tokens:     tokens,
+		hasher:     hasher,
 		issuer:     issuer,
 		csrf:       csrf,
 		adminToken: adminRegisterToken,
 	}
+	// Фиктивный хеш вычисляется один раз через внедренный порт: если
+	// пользователь не найден или неактивен, Compare всё равно выполнит
+	// полноценное хеширование, чтобы время ответа не выдавало существование
+	// учетной записи (защита от timing-атак).
+	if hasher != nil {
+		if h, err := hasher.Hash(dummyPassword); err == nil {
+			uc.dummyHash = h
+		}
+	}
+	return uc
 }
 
 var _ AuthUseCase = (*AuthUseCaseImpl)(nil)
@@ -127,20 +129,10 @@ func validateRegister(in RegisterInput) (email, first, last string, err error) {
 	return email, first, last, nil
 }
 
-// bcryptHash — единая точка хеширования пароля для всего слоя use-case
-// (используется и в AuthUseCase, и в UserUseCase).
-func bcryptHash(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
-}
-
-// createUserWithHash — общая часть: хеширование пароля (bcrypt) и создание
-// пользователя через репозиторий.
+// createUserWithHash — общая часть: хеширование пароля (через порт
+// PasswordHasher) и создание пользователя через репозиторий.
 func (uc *AuthUseCaseImpl) createUserWithHash(ctx context.Context, email, password, role, first, last string) (*models.User, error) {
-	hash, err := bcryptHash(password)
+	hash, err := uc.hasher.Hash(password)
 	if err != nil {
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
 	}
@@ -200,11 +192,11 @@ func (uc *AuthUseCaseImpl) Login(ctx context.Context, in LoginInput) (*SessionRe
 
 	// При невалидном пользователе сравниваем с фиктивным хешем, чтобы время
 	// ответа не отличалось от случая «пользователь существует».
-	hashToCompare := DummyHash
+	hashToCompare := uc.dummyHash
 	if isValidUser {
-		hashToCompare = []byte(user.PasswordHash)
+		hashToCompare = user.PasswordHash
 	}
-	passwordErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(in.Password))
+	passwordErr := uc.hasher.Compare(hashToCompare, in.Password)
 	if !isValidUser || passwordErr != nil {
 		return nil, newErr(ErrCodeUnauthorized, messages.InvalidCredentials)
 	}

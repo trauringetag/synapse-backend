@@ -39,10 +39,11 @@ func main() {
 	// Слой use-case собирается здесь (Composition Root): сценарии получают
 	// репозитории и сервисы безопасности. HTTP-обработчики знают только
 	// интерфейсы usecase.AuthUseCase / usecase.UserUseCase.
+	hasher := auth.NewBcryptHasher()
 	jwtService := auth.NewJWTService(cfg)
 	csrfService := auth.NewCSRFService(cfg)
-	authUC := usecase.NewAuthUseCase(users, tokens, jwtService, csrfService, cfg.AdminRegisterToken)
-	userUC := usecase.NewUserUseCase(users, tokens)
+	authUC := usecase.NewAuthUseCase(users, tokens, hasher, jwtService, csrfService, cfg.AdminRegisterToken)
+	userUC := usecase.NewUserUseCase(users, tokens, hasher)
 
 	handler := router.New(cfg, authUC, userUC, users, pool, docs.OpenAPI)
 
