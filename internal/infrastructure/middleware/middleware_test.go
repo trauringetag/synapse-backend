@@ -777,6 +777,26 @@ func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window
 	return bucket.hits, nil
 }
 
+// Cleanup реализует порт domain.RateLimitStore: удаляет просроченные окна
+// (для in-memory теста — просто отбрасывает buckets, чьё окно истекло).
+func (s *memoryRateLimitStore) Cleanup(ctx context.Context, maxWindow time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.err != nil {
+		return s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for key, bucket := range s.buckets {
+		if !bucket.start.Add(maxWindow).After(now) {
+			delete(s.buckets, key)
+		}
+	}
+	return nil
+}
+
 // TestRateLimit проверяет лимиты, изоляцию ключей, сброс окна и fail-closed без PostgreSQL.
 func TestRateLimit(t *testing.T) {
 	t.Run("Разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {

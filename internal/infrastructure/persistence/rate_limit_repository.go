@@ -45,3 +45,22 @@ func (r *RateLimitRepository) Increment(ctx context.Context, key string, window 
 	err := r.pool.QueryRow(ctx, `INSERT INTO api_rate_limits (bucket_key, window_start, hits) VALUES ($1, to_timestamp(floor(extract(epoch from now()) / $2) * $2), 1) ON CONFLICT (bucket_key) DO UPDATE SET window_start = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN EXCLUDED.window_start ELSE api_rate_limits.window_start END, hits = CASE WHEN api_rate_limits.window_start + ($2 * interval '1 second') <= now() THEN 1 ELSE api_rate_limits.hits + 1 END RETURNING hits`, key, int(window.Seconds())).Scan(&count)
 	return count, err
 }
+
+// Cleanup удаляет из таблицы api_rate_limits все записи, чьё окно заведомо
+// истекло: window_start + maxWindow <= now(). Такие строки больше никогда не
+// будут «переиспользованы» методом Increment (он всегда открывает новое окно),
+// поэтому их удаление безопасно и предотвращает бесконечный рост таблицы.
+//
+// maxWindow — максимально возможная длительность окна в системе (например,
+// 1 час для эндпоинтов регистрации). Вызывается фоновым воркером
+// (internal/infrastructure/jobs.RateLimitCleanupWorker).
+func (r *RateLimitRepository) Cleanup(ctx context.Context, maxWindow time.Duration) error {
+	if r.pool == nil {
+		return errors.New("rate limit database is not configured")
+	}
+	if maxWindow < time.Second {
+		return errors.New("rate limit max window must be at least one second")
+	}
+	_, err := r.pool.Exec(ctx, `DELETE FROM api_rate_limits WHERE window_start + ($1 * interval '1 second') <= now()`, int(maxWindow.Seconds()))
+	return err
+}

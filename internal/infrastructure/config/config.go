@@ -29,6 +29,13 @@ type Config struct {
 	RefreshRateLimit       int
 	LogoutRateLimit        int
 	AuthenticatedRateLimit int
+	// RateLimitCleanupInterval — как часто фоновый воркер удаляет устаревшие
+	// строки из api_rate_limits (RATE_LIMIT_CLEANUP_INTERVAL, по умолчанию 1h).
+	RateLimitCleanupInterval time.Duration
+	// RateLimitMaxWindowSeconds — максимально возможное окно лимитов в системе
+	// в секундах (RATE_LIMIT_MAX_WINDOW_SECONDS, по умолчанию 3600 — 1 час для
+	// регистрации). Записи старше window_start + maxWindow удаляются.
+	RateLimitMaxWindowSeconds int
 }
 
 func Load() (*Config, error) {
@@ -42,6 +49,8 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("REFRESH_TOKEN_TTL: %w", err)
 	}
+
+	cleanupInterval := durationEnv("RATE_LIMIT_CLEANUP_INTERVAL", time.Hour)
 
 	secret := env("JWT_SECRET", "")
 	if secret == "" {
@@ -83,23 +92,25 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		AppPort:                env("APP_PORT", "8080"),
-		AppEnv:                 env("APP_ENV", "synapse-backend"),
-		DatabaseURL:            dbURL,
-		JWTSecret:              []byte(secret),
-		AccessTTL:              accessTTL,
-		RefreshTTL:             refreshTTL,
-		AdminRegisterToken:     adminToken,
-		CookieSecure:           env("COOKIE_SECURE", "true") == "true",
-		CookieSameSite:         sameSite,
-		CookieDomain:           env("COOKIE_DOMAIN", ""),
-		CookiePath:             "/api/v1/",
-		CORSOrigins:            origins,
-		LoginRateLimit:         intEnv("LOGIN_RATE_LIMIT", 10),
-		RegisterRateLimit:      intEnv("REGISTER_RATE_LIMIT", 10),
-		RefreshRateLimit:       intEnv("REFRESH_RATE_LIMIT", 30),
-		LogoutRateLimit:        intEnv("LOGOUT_RATE_LIMIT", 10),
-		AuthenticatedRateLimit: intEnv("AUTHENTICATED_RATE_LIMIT", 600),
+		AppPort:                   env("APP_PORT", "8080"),
+		AppEnv:                    env("APP_ENV", "synapse-backend"),
+		DatabaseURL:               dbURL,
+		JWTSecret:                 []byte(secret),
+		AccessTTL:                 accessTTL,
+		RefreshTTL:                refreshTTL,
+		AdminRegisterToken:        adminToken,
+		CookieSecure:              env("COOKIE_SECURE", "true") == "true",
+		CookieSameSite:            sameSite,
+		CookieDomain:              env("COOKIE_DOMAIN", ""),
+		CookiePath:                "/api/v1/",
+		CORSOrigins:               origins,
+		LoginRateLimit:            intEnv("LOGIN_RATE_LIMIT", 10),
+		RegisterRateLimit:         intEnv("REGISTER_RATE_LIMIT", 10),
+		RefreshRateLimit:          intEnv("REFRESH_RATE_LIMIT", 30),
+		LogoutRateLimit:           intEnv("LOGOUT_RATE_LIMIT", 10),
+		AuthenticatedRateLimit:    intEnv("AUTHENTICATED_RATE_LIMIT", 600),
+		RateLimitCleanupInterval:  cleanupInterval,
+		RateLimitMaxWindowSeconds: intEnv("RATE_LIMIT_MAX_WINDOW_SECONDS", 3600),
 	}, nil
 }
 
@@ -113,6 +124,16 @@ func env(key, fallback string) string {
 func intEnv(key string, fallback int) int {
 	v, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
 	if err != nil || v < 1 {
+		return fallback
+	}
+	return v
+}
+
+// durationEnv читает длительность (time.ParseDuration) из переменной окружения.
+// Используется для настроек фоновых задач (например, интервала очистки).
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	v, err := time.ParseDuration(env(key, fallback.String()))
+	if err != nil || v <= 0 {
 		return fallback
 	}
 	return v

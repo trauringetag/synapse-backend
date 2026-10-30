@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/trauringetag/synapse-backend/docs"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/database"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/jobs"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/persistence"
 	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/transport"
@@ -24,7 +24,12 @@ func main() {
 		log.Fatalf("Конфигурация: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Корневой контекст приложения: отменяется при получении SIGINT/SIGTERM.
+	// Используется для graceful shutdown HTTP-сервера и фоновых воркеров.
+	rootCtx, rootCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer rootCancel()
+
+	ctx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
 	defer cancel()
 
 	pool, err := db.Connect(ctx, cfg.DatabaseURL)
@@ -39,6 +44,17 @@ func main() {
 	// запросов инкапсулирована в инфраструктурном слое (репозитории),
 	// middleware получает только интерфейс.
 	rateLimitRepo := persistence.NewRateLimitRepository(pool)
+
+	// Фоновый воркер очистки api_rate_limits: периодически удаляет записи,
+	// чьё окно заведомо истекло (window_start + maxWindow <= now()), чтобы
+	// таблица не росла бесконечно. Завершается при отмене rootCtx
+	// (graceful shutdown по SIGINT/SIGTERM).
+	cleanupWorker := jobs.NewRateLimitCleanupWorker(
+		rateLimitRepo,
+		cfg.RateLimitCleanupInterval,
+		time.Duration(cfg.RateLimitMaxWindowSeconds)*time.Second,
+	)
+	go cleanupWorker.Run(rootCtx)
 
 	// Слой use-case собирается здесь (Composition Root): сценарии получают
 	// репозитории и сервисы безопасности. HTTP-обработчики знают только
@@ -67,9 +83,10 @@ func main() {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	// Ждём SIGINT/SIGTERM (rootCtx отменяется signal.NotifyContext), затем
+	// корректно останавливаем HTTP-сервер. Фоновый воркер очистки завершается
+	// сам при отмене rootCtx (см. cleanupWorker.Run).
+	<-rootCtx.Done()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
