@@ -41,8 +41,9 @@ type UserListResult struct {
 //   - List       — постраничная выдача с фильтрами (UserListFilter).
 //   - ReplaceProfile — полная замена профиля (email, имя, фамилия).
 //   - Update     — частичное обновление (nil-указатели = поле не менять).
-//   - Replace    — полная замена всех полей пользователя.
-//   - Delete     — удаление пользователя по ID.
+//   - Delete     — физическое (hard) удаление пользователя по ID; используется
+//     и админским сценарием (DELETE /users/{id}), и самоудалением
+//     (DELETE /users/me), отзыв refresh-токенов выполняется слоем use-case.
 type UserRepository interface {
 	Create(context.Context, string, string, string, string, string) (*User, error)
 	GetByID(context.Context, uuid.UUID) (*User, error)
@@ -52,6 +53,9 @@ type UserRepository interface {
 	Update(context.Context, uuid.UUID, *string, *string, *string, *string, *string) (*User, error)
 	Replace(context.Context, uuid.UUID, string, string, string, string, string) (*User, error)
 	Delete(context.Context, uuid.UUID) error
+	// DeleteSelf — физическое удаление собственного аккаунта (DELETE /users/me):
+	// в отличие от Delete не защищён ролью admin, т.к. субъект удаляет себя сам.
+	DeleteSelf(context.Context, uuid.UUID) error
 }
 
 // RefreshTokenRepository — ЕДИНСТВЕННЫЙ источник правды для порта хранилища

@@ -144,7 +144,8 @@ type AuthUseCase interface {
 
 // UserUseCase — бизнес-сценарии управления пользователями: чтение, список с
 // фильтрацией, создание, замена/обновление профиля (своего и админские),
-// удаление с защитой собственной учетной записи.
+// самоудаление (деактивация, DELETE /me) и физическое удаление админом с
+// защитой собственной учетной записи.
 type UserUseCase interface {
 	GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 	List(ctx context.Context, in ListUsersInput) (*domain.UserListResult, error)
@@ -154,5 +155,8 @@ type UserUseCase interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*domain.User, error)
 	AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*domain.User, error)
+	// DeleteMe — самоудаление текущего пользователя (DELETE /users/me):
+	// физическое (hard) удаление с немедленным отзывом всех refresh-токенов.
+	DeleteMe(ctx context.Context, userID uuid.UUID) error
 	Delete(ctx context.Context, in DeleteUserInput) error
 }

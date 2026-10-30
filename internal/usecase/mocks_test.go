@@ -49,6 +49,7 @@ type MockUserRepository struct {
 	UpdateFunc         func(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error)
 	ReplaceFunc        func(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error)
 	DeleteFunc         func(ctx context.Context, id uuid.UUID) error
+	DeleteSelfFunc     func(ctx context.Context, id uuid.UUID) error
 }
 
 var _ domain.UserRepository = (*MockUserRepository)(nil)
@@ -141,6 +142,14 @@ func (m *MockUserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	m.record("Delete", id)
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(ctx, id)
+	}
+	return errMockNotConfigured
+}
+
+func (m *MockUserRepository) DeleteSelf(ctx context.Context, id uuid.UUID) error {
+	m.record("DeleteSelf", id)
+	if m.DeleteSelfFunc != nil {
+		return m.DeleteSelfFunc(ctx, id)
 	}
 	return errMockNotConfigured
 }

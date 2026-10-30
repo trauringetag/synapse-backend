@@ -196,6 +196,19 @@ func (uc *UserUseCaseImpl) UpdateOwnProfile(ctx context.Context, in UpdateOwnPro
 
 // ---------- Админские замена/обновление ----------
 
+// deactivateSessions — единая политика деактивации (soft delete): любое
+// переведение аккаунта в статус inactive обязано сопровождаться немедленным
+// отзывом всех refresh-токенов пользователя, чтобы заблокированный/удаленный
+// аккаунт не сохранил живые сессии. Сбой отзыва не откатывает уже выполненное
+// обновление статуса (запись уже inactive — вход и ротация токенов для неё
+// всё равно запрещены на уровне БД/middleware), но обязательно логируется
+// для аудита и ручного вмешательства.
+func (uc *UserUseCaseImpl) deactivateSessions(ctx context.Context, userID uuid.UUID) {
+	if err := uc.tokens.RevokeAllForUser(ctx, userID); err != nil {
+		log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", userID.String(), err)
+	}
+}
+
 // AdminReplace полностью заменяет карточку пользователя (PUT /users/{id}).
 // Поле role намеренно не принимается: роль через PUT не меняется.
 func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*domain.User, error) {
@@ -242,7 +255,8 @@ func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUser
 
 // AdminUpdate частично обновляет карточку пользователя админом (PATCH /users/{id}).
 // При смене пароля хеш пересоздается, а все активные сессии пользователя
-// отзываются (требование безопасности).
+// отзываются (требование безопасности). Перевод статуса в inactive тоже
+// отзывает все сессии — единая политика деактивации (см. deactivateSessions).
 func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*domain.User, error) {
 	var email, first, last, passwordHash, status *string
 
@@ -294,23 +308,93 @@ func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserIn
 	case err != nil:
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToUpdateUser, err)
 	}
-	// Смена пароля инвалидирует все refresh-токены пользователя.
-	if passwordHash != nil {
-		if revokeErr := uc.tokens.RevokeAllForUser(ctx, in.ID); revokeErr != nil {
-			log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", in.ID.String(), revokeErr)
-		}
+	// Единая политика инвалидации сессий (Задача 2): смена пароля и перевод
+	// статуса в inactive (деактивация) обязывают отозвать все refresh-токены
+	// пользователя. Ошибка отзыва логируется, но не откатывает уже выполненное
+	// обновление (см. deactivateSessions).
+	if passwordHash != nil || (status != nil && *status == domain.StatusInactive) {
+		uc.deactivateSessions(ctx, in.ID)
 	}
 	return user, nil
 }
 
 // ---------- Удаление ----------
 
-// Delete удаляет пользователя админом. Запрещено удалять собственную
-// учетную запись; защищенные аккаунты (администраторы) отклоняются
-// репозиторием через domain.ErrProtected.
+// DeleteMe реализует самоудаление текущего пользователя (DELETE /users/me).
+//
+// Самоудаление выполняется как физическое (hard) удаление записи из БД.
+// Алгоритм:
+//  1. Получить пользователя по userID; если не найден — ErrCodeNotFound.
+//  2. Если аккаунт уже inactive — конфликт (повторное/некорректное
+//     самоудаление деактивированного аккаунта запрещено).
+//  3. Немедленно отозвать все refresh-токены (RevokeAllForUser), чтобы старые
+//     сессии нельзя было использовать после удаления. Стратегия частичного
+//     сбоя: ошибка отзыва логируется, но операция продолжается — запись всё
+//     равно удаляется (после hard delete вход для несуществующего пользователя
+//     невозможен в принципе, поэтому живых сессий остаться не может).
+//  4. Физически удалить запись через UserRepository.Delete (DELETE FROM users).
+func (uc *UserUseCaseImpl) DeleteMe(ctx context.Context, userID uuid.UUID) error {
+	user, err := uc.users.GetByID(ctx, userID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
+	case err != nil:
+		return wrapErr(ErrCodeInternal, messages.FailedToGetUser, err)
+	}
+	if user.Status == domain.StatusInactive {
+		// Аккаунт уже деактивирован админом — самоудаление не имеет смысла.
+		return newErr(ErrCodeConflict, messages.AccountAlreadyInactive)
+	}
+
+	// Шаг 1 — отзыв сессий. При сбое логируем и продолжаем (см. докстроку).
+	if revokeErr := uc.tokens.RevokeAllForUser(ctx, userID); revokeErr != nil {
+		log.Printf("event=revoke_all_sessions_failed user_id=%s op=delete_me error=%v", userID.String(), revokeErr)
+	}
+
+	// Шаг 2 — физическое (hard) удаление записи пользователя.
+	// Delete защищает аккаунты роли admin (domain.ErrProtected) — эта защита
+	// относится к админскому маршруту DELETE /users/{id}. Самоудаление всегда
+	// выполняется над собственным аккаунтом, поэтому при таком отказе удаляется
+	// через DeleteSelf (DELETE FROM users без условия по роли).
+	if delErr := uc.users.Delete(ctx, userID); delErr != nil {
+		switch {
+		case errors.Is(delErr, domain.ErrNotFound):
+			return wrapErr(ErrCodeNotFound, messages.UserNotFound, delErr)
+		case errors.Is(delErr, domain.ErrProtected):
+			if retryErr := uc.users.DeleteSelf(ctx, userID); retryErr != nil {
+				if errors.Is(retryErr, domain.ErrNotFound) {
+					return wrapErr(ErrCodeNotFound, messages.UserNotFound, retryErr)
+				}
+				return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, retryErr)
+			}
+		default:
+			return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, delErr)
+		}
+	}
+	return nil
+}
+
+// Delete выполняет физическое (hard) удаление пользователя админом
+// (DELETE /users/{id}). Политики (Задача 2):
+//   - необратимо: запись стирается из БД; для сохранения данных используется
+//     обратимая деактивация (PATCH /users/{id} со status=inactive), которая
+//     также отзывает сессии (см. deactivateSessions);
+//   - доступно только админскому сценарию (RBAC на уровне маршрута) и
+//     защищено от самоудаления (ErrForbidden, см. AdminCannotDeleteSelf —
+//     пользователь удаляет себя через DELETE /users/me, см. DeleteMe);
+//   - перед удалением обязательно отзываются все refresh-токены цели, чтобы
+//     не осталось «висячих» сессий. Стратегия частичного сбоя: если отзыв
+//     сессий завершился ошибкой, физическое удаление НЕ выполняется (возвращается
+//     внутренняя ошибка) — удаление без отзыва оставило бы живые токены, а
+//     откатывать здесь нечего, поэтому безопаснее прервать операцию.
 func (uc *UserUseCaseImpl) Delete(ctx context.Context, in DeleteUserInput) error {
 	if in.TargetID == in.PrincipalID {
 		return newErr(ErrCodeForbidden, messages.AdminCannotDeleteSelf)
+	}
+	// Отзываем сессии ДО физического удаления (гарантия отсутствия висячих токенов).
+	if revokeErr := uc.tokens.RevokeAllForUser(ctx, in.TargetID); revokeErr != nil {
+		log.Printf("event=revoke_all_sessions_failed user_id=%s op=admin_delete error=%v", in.TargetID.String(), revokeErr)
+		return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, revokeErr)
 	}
 	err := uc.users.Delete(ctx, in.TargetID)
 	switch {

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Synapse API
-  version: 1.0.29.2
+  version: 1.1.0.0
   description: |
     REST API на Go (chi) с PostgreSQL для регистрации, аутентификации и ролевого
     управления пользователями. Спецификация полностью соответствует текущей
@@ -1272,6 +1272,74 @@ paths:
                 $ref: '#/components/schemas/Error'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags: [Users]
+      summary: Самоудаление (физическое удаление) собственного аккаунта
+      description: |
+        Физически (hard delete) удаляет запись текущего пользователя из БД.
+        Одновременно немедленно отзываются **все** активные refresh-токены
+        пользователя, поэтому старые сессии перестают работать сразу же.
+
+        Доступен ролям `user` и `admin`, требует валидную cookie `access_token`,
+        CSRF-пары (`csrf_token` + `X-CSRF-Token`) и разрешенного Origin/Referer.
+
+        Повторный вызов дает `409`, если аккаунт был переведён администратором в
+        `inactive` до самоудаления; через HTTP-стек до него обычно не доходит,
+        поскольку `middleware.Authenticate` отклоняет неактивный аккаунт с `401`
+        еще до хендлера. Для уже удалённого аккаунта запрос также возвращает `401`.
+
+        Необратимость: восстановление удалённой записи возможно только
+        восстановлением резервной копии БД. Для обратимого закрытия доступа
+        используется блокировка администратором: `PATCH /api/v1/users/{id}` со
+        `status: "inactive"` (запись сохраняется, реактивация — тем же PATCH).
+
+        Частичные сбои: если отзыв сессий завершился ошибкой, она только логируется
+        (`event=revoke_all_sessions_failed`), а удаление все равно выполняется —
+        после hard delete вход для несуществующего пользователя невозможен в
+        принципе, поэтому живых сессий остаться не может.
+      operationId: deleteMe
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Аккаунт физически удалён, все сессии отозваны (тело ответа отсутствует)
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlNoStore'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Пользователь не найден (аккаунт удален из БД после прохождения middleware)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: |
+            `409 CONFLICT` («Учетная запись уже деактивирована») — самоудаление
+            аккаунта, заблокированного администратором (`status: inactive`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: CONFLICT
+                message: Учетная запись уже деактивирована
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Ошибка удаления пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: INTERNAL_SERVER_ERROR
+                message: Не удалось удалить пользователя
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /users:
     get:
       tags: [Users]
@@ -1502,8 +1570,13 @@ paths:
       description: |
         Только роль `admin`. Допустимы `email`, `password`, `first_name`, `last_name`,
         `status`; нужно передать хотя бы одно поле. Поле `role` игнорируется.
-        При смене пароля все refresh-токены пользователя отзываются (ошибка отзыва
-        только логируется и не меняет успешный ответ). Требуются CSRF и разрешенный Origin/Referer.
+
+        Единая политика деактивации: все refresh-токены пользователя отзываются при
+        смене пароля **и** при переводе `status` в `inactive` (блокировка должна
+        немедленно закрывать активные сессии). Реактивация (`status: "active"`) сессии
+        не отзывает — у пользователя их уже нет. Ошибка отзыва только логируется
+        (`event=revoke_all_sessions_failed`) и не меняет успешный ответ.
+        Требуются CSRF и разрешенный Origin/Referer.
       operationId: patchUser
       security:
         - cookieAuth: []
@@ -1563,13 +1636,24 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
     delete:
       tags: [Users]
-      summary: Удаление пользователя (админ)
+      summary: Физическое удаление пользователя (админ)
       description: |
-        Только роль `admin`. Нельзя удалить собственную учетную запись (`403`,
+        Только роль `admin`. Необратимое hard delete: запись пользователя удаляется из БД,
+        refresh-токены каскадно удаляются вместе с ней.
+
+        Порядок операций строго фиксирован: сначала вызывается `RevokeAllForUser`
+        (отзыв всех активных refresh-сессий), и только при его успехе выполняется
+        физическое удаление. Это исключает «висячие» живые сессии у уже удаленного
+        аккаунта. Если отзыв сессий завершился ошибкой, удаление НЕ выполняется —
+        возвращается `500` («Не удалось удалить пользователя»), чтобы администратор мог
+        повторить операцию осознанно.
+
+        Нельзя удалить собственную учетную запись (`403`,
         «Администратор не может удалить собственную учетную запись») и любой аккаунт
         с ролью `admin` (`403`, «Нельзя удалить учетную запись администратора» —
-        репозиторий возвращает `domain.ErrProtected`). Каскадно удаляются refresh-токены
-        пользователя. Требуются CSRF и разрешенный Origin/Referer.
+        репозиторий возвращает `domain.ErrProtected`). Обычным пользователям физическое
+        удаление недоступно в принципе — им доступно только самоудаление-деактивация
+        через `DELETE /api/v1/users/me`. Требуются CSRF и разрешенный Origin/Referer.
       operationId: deleteUser
       security:
         - cookieAuth: []

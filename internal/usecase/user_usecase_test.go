@@ -924,6 +924,310 @@ func TestUserUseCase_AdminDelete_InternalError(t *testing.T) {
 	assert.ErrorIs(t, err, dbErr)
 }
 
+// ---------- DeleteMe (самоудаление / hard delete, DELETE /users/me) ----------
+
+func TestUserUseCase_DeleteMe(t *testing.T) {
+	dbErr := errors.New("db connection broken")
+
+	tests := []struct {
+		name string
+
+		getFunc    func(ctx context.Context, id uuid.UUID) (*domain.User, error)
+		revokeFunc func(ctx context.Context, id uuid.UUID) error
+		deleteFunc     func(ctx context.Context, id uuid.UUID) error
+deleteSelfFunc func(ctx context.Context, id uuid.UUID) error
+
+		wantErr     bool
+		wantCode    ErrorCode
+		wantMessage string
+		wantErrIs   error // errors.Is для обёрнутой доменной ошибки (опционально)
+		wantRevokes int   // сколько раз должен быть вызван RevokeAllForUser
+		wantDeletes int   // сколько раз должен быть вызван users.Delete
+	}{
+		{
+			name: "success: hard delete + revoke all sessions",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				return sampleUser(id), nil
+			},
+			revokeFunc:  func(_ context.Context, _ uuid.UUID) error { return nil },
+			deleteFunc:  func(_ context.Context, _ uuid.UUID) error { return nil },
+			wantErr:     false,
+			wantRevokes: 1,
+			wantDeletes: 1,
+		},
+		{
+			name: "user not found -> 404, no revoke, no delete",
+			getFunc: func(_ context.Context, _ uuid.UUID) (*domain.User, error) {
+				return nil, domain.ErrNotFound
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeNotFound,
+			wantMessage: messages.UserNotFound,
+			wantErrIs:   domain.ErrNotFound,
+			wantRevokes: 0,
+			wantDeletes: 0,
+		},
+		{
+			name: "already inactive -> conflict, no revoke, no delete",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				u := sampleUser(id)
+				u.Status = domain.StatusInactive
+				return u, nil
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeConflict,
+			wantMessage: messages.AccountAlreadyInactive,
+			wantRevokes: 0,
+			wantDeletes: 0,
+		},
+		{
+			name: "revoke failure is logged but operation continues (record still deleted)",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				return sampleUser(id), nil
+			},
+			revokeFunc: func(_ context.Context, _ uuid.UUID) error {
+				return errors.New("token store timeout")
+			},
+			deleteFunc:  func(_ context.Context, _ uuid.UUID) error { return nil },
+			wantErr:     false, // частичный сбой отзыва не откатывает удаление
+			wantRevokes: 1,
+			wantDeletes: 1,
+		},
+		{
+			name: "delete DB error -> internal error",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				return sampleUser(id), nil
+			},
+			revokeFunc: func(_ context.Context, _ uuid.UUID) error { return nil },
+			deleteFunc: func(_ context.Context, _ uuid.UUID) error {
+				return dbErr
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeInternal,
+			wantMessage: messages.FailedToDeleteUser,
+			wantErrIs:   dbErr,
+			wantRevokes: 1,
+			wantDeletes: 1,
+		},
+		{
+			name: "delete not found (race) -> 404",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				return sampleUser(id), nil
+			},
+			revokeFunc: func(_ context.Context, _ uuid.UUID) error { return nil },
+			deleteFunc: func(_ context.Context, _ uuid.UUID) error {
+				return domain.ErrNotFound
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeNotFound,
+			wantMessage: messages.UserNotFound,
+			wantErrIs:   domain.ErrNotFound,
+			wantRevokes: 1,
+			wantDeletes: 1,
+		},
+		{
+			name: "admin self-delete: Delete -> ErrProtected, fallback DeleteSelf succeeds",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				u := sampleUser(id)
+				u.Role = domain.RoleAdmin
+				return u, nil
+			},
+			revokeFunc: func(_ context.Context, _ uuid.UUID) error { return nil },
+			deleteFunc: func(_ context.Context, _ uuid.UUID) error {
+				return domain.ErrProtected
+			},
+			deleteSelfFunc: func(_ context.Context, _ uuid.UUID) error { return nil },
+			wantErr:        false,
+			wantRevokes:    1,
+			wantDeletes:    1, // один из двух методов удаления обязательно вызван
+		},
+		{
+			name: "admin self-delete: DeleteSelf fails after ErrProtected -> internal error",
+			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
+				u := sampleUser(id)
+				u.Role = domain.RoleAdmin
+				return u, nil
+			},
+			revokeFunc: func(_ context.Context, _ uuid.UUID) error { return nil },
+			deleteFunc: func(_ context.Context, _ uuid.UUID) error {
+				return domain.ErrProtected
+			},
+			deleteSelfFunc: func(_ context.Context, _ uuid.UUID) error {
+				return dbErr
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeInternal,
+			wantMessage: messages.FailedToDeleteUser,
+			wantErrIs:   dbErr,
+			wantRevokes: 1,
+			wantDeletes: 1,
+		},
+		{
+			name: "get internal error -> internal error, no revoke/delete",
+			getFunc: func(_ context.Context, _ uuid.UUID) (*domain.User, error) {
+				return nil, dbErr
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeInternal,
+			wantMessage: messages.FailedToGetUser,
+			wantRevokes: 0,
+			wantDeletes: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newUserFixture()
+			userID := uuid.New()
+
+			if tt.getFunc != nil {
+				f.users.GetByIDFunc = tt.getFunc
+			}
+			if tt.revokeFunc != nil {
+				f.tokens.RevokeAllForUserFunc = tt.revokeFunc
+			}
+			if tt.deleteFunc != nil {
+				f.users.DeleteFunc = tt.deleteFunc
+			}
+			if tt.deleteSelfFunc != nil {
+				f.users.DeleteSelfFunc = tt.deleteSelfFunc
+			}
+
+			err := f.uc.DeleteMe(context.Background(), userID)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				ue := requireUseCaseErr(t, err, tt.wantCode)
+				assert.Equal(t, tt.wantMessage, ue.Message)
+				if tt.wantErrIs != nil {
+					assert.ErrorIs(t, err, tt.wantErrIs)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.wantRevokes, f.tokens.CountCalls("RevokeAllForUser"),
+				"количество вызовов RevokeAllForUser")
+			assert.Equal(t, tt.wantDeletes, f.users.CountCalls("Delete"),
+				"количество вызовов users.Delete")
+
+			// Порядок вызовов при успехе: GetByID -> Delete (или DeleteSelf для
+			// admin-аккаунта), причём отзыв сессий выполняется строго перед
+			// физическим удалением.
+			if !tt.wantErr && tt.wantDeletes == 1 {
+				var seq []string
+				for _, c := range f.users.Calls() {
+					seq = append(seq, c.method)
+				}
+				require.GreaterOrEqual(t, len(seq), 2)
+				assert.Equal(t, "GetByID", seq[0])
+				assert.Contains(t, []string{"Delete", "DeleteSelf"}, seq[len(seq)-1])
+				assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
+			}
+		})
+	}
+}
+
+// ---------- AdminUpdate: политика деактивации (Задача 2) ----------
+
+func TestUserUseCase_AdminUpdate_StatusInactive_RevokesSessions(t *testing.T) {
+	// Перевод статуса в inactive обязан ровно один раз вызвать RevokeAllForUser.
+	f := newUserFixture()
+	id := uuid.New()
+	f.users.UpdateFunc = func(_ context.Context, got uuid.UUID, _, _, _, _, status *string) (*domain.User, error) {
+		require.NotNil(t, status)
+		assert.Equal(t, domain.StatusInactive, *status)
+		u := sampleUser(got)
+		u.Status = *status
+		return u, nil
+	}
+	var revokedFor uuid.UUID
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, uid uuid.UUID) error {
+		revokedFor = uid
+		return nil
+	}
+
+	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
+		ID:     id,
+		Status: strPtr(domain.StatusInactive),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, domain.StatusInactive, user.Status)
+	assert.Equal(t, id, revokedFor, "отзыв должен быть выполнен для целевого пользователя")
+	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"),
+		"при status=inactive RevokeAllForUser вызывается ровно 1 раз")
+}
+
+func TestUserUseCase_AdminUpdate_StatusActive_DoesNotRevoke(t *testing.T) {
+	// Реактивация (active) без смены пароля сессии НЕ отзывает.
+	f := newUserFixture()
+	id := uuid.New()
+	f.users.UpdateFunc = func(_ context.Context, got uuid.UUID, _, _, _, _, _ *string) (*domain.User, error) {
+		return sampleUser(got), nil
+	}
+
+	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
+		ID:     id,
+		Status: strPtr(domain.StatusActive),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, 0, f.tokens.CountCalls("RevokeAllForUser"))
+}
+
+// ---------- Delete (admin): отзыв сессий ДО физического удаления ----------
+
+func TestUserUseCase_AdminDelete_Success_RevokesBeforeDelete(t *testing.T) {
+	// Проверяем порядок: RevokeAllForUser строго до users.Delete.
+	f := newUserFixture()
+	target, principal := uuid.New(), uuid.New()
+
+	var order []string
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, uid uuid.UUID) error {
+		assert.Equal(t, target, uid)
+		order = append(order, "RevokeAllForUser")
+		return nil
+	}
+	f.users.DeleteFunc = func(_ context.Context, id uuid.UUID) error {
+		assert.Equal(t, target, id)
+		order = append(order, "Delete")
+		return nil
+	}
+
+	err := f.uc.Delete(context.Background(), DeleteUserInput{TargetID: target, PrincipalID: principal})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"RevokeAllForUser", "Delete"}, order,
+		"сессии должны отзываться до физического удаления")
+}
+
+func TestUserUseCase_AdminDelete_RevokeFailure_AbortsDelete(t *testing.T) {
+	// Стратегия (зафиксирована в докстроке Delete): при сбое отзыва сессий
+	// физическое удаление НЕ выполняется — возвращаем внутреннюю ошибку.
+	f := newUserFixture()
+	target, principal := uuid.New(), uuid.New()
+	revokeErr := errors.New("token store unavailable")
+
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error {
+		return revokeErr
+	}
+	f.users.DeleteFunc = func(_ context.Context, _ uuid.UUID) error {
+		t.Fatal("users.Delete не должен вызываться при сбое отзыва сессий")
+		return nil
+	}
+
+	err := f.uc.Delete(context.Background(), DeleteUserInput{TargetID: target, PrincipalID: principal})
+
+	ue := requireUseCaseErr(t, err, ErrCodeInternal)
+	assert.Equal(t, messages.FailedToDeleteUser, ue.Message)
+	assert.ErrorIs(t, err, revokeErr)
+	assert.Zero(t, f.users.CountCalls("Delete"))
+	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
+}
+
 // ---------- Классификация ошибок (HTTP-адаптер) ----------
 
 func TestErrorCode_HTTPStatus(t *testing.T) {

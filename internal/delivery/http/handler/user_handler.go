@@ -237,6 +237,23 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, user)
 }
 
+// DeleteMe — самоудаление (физическое удаление, hard delete) текущего пользователя:
+// DELETE /api/v1/users/me. Требует валидный access_token и CSRF-пару
+// (state-changing запрос защищается middleware.CSRF на уровне роутера).
+// Успех — 204 No Content; все refresh-токены пользователя отзываются.
+func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	p, ok := middleware.FromContext(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, messages.Unauthorized, nil)
+		return
+	}
+	if err := h.uc.DeleteMe(r.Context(), p.ID); err != nil {
+		respondError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := domain.UUIDFromString(chi.URLParam(r, "id"))
 	if err != nil {

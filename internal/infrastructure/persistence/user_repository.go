@@ -155,6 +155,22 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 	return &u, nil
 }
 
+// DeleteSelf выполняет физическое удаление собственного аккаунта по запросу
+// самого пользователя (DELETE /users/me). В отличие от Delete здесь нет защиты
+// роли admin: субъект и цель совпадают, поэтому удаление разрешено для любой
+// роли (политика «админ не удаляет себя» относится только к админскому
+// маршруту DELETE /users/{id}).
+func (r *UserRepository) DeleteSelf(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
 	var u domain.User
 	err := r.pool.QueryRow(ctx, `

@@ -78,6 +78,10 @@ func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseC
 				r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 				r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
 				r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)
+				// Самоудаление = физическое (hard) удаление + отзыв всех сессий.
+				// Маршрут внутри middleware.CSRF(cfg) — state-changing запрос,
+				// CSRF обязателен; доступ — по валидному access_token.
+				r.With(middleware.RequireUserOrAdmin).Delete("/users/me", userH.DeleteMe)
 
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireAdmin)

@@ -14,4 +14,7 @@ const (
 
 	AdminCannotDeleteSelf    = "Администратор не может удалить собственную учетную запись"
 	CannotDeleteAdminAccount = "Нельзя удалить учетную запись администратора"
+
+	// Сообщения сценария самоудаления (DELETE /users/me, hard delete аккаунта).
+	AccountAlreadyInactive = "Учетная запись уже деактивирована"
 )

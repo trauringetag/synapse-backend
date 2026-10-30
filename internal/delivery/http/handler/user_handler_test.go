@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/google/uuid"
@@ -871,6 +872,176 @@ func TestDelete(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// DELETE /users/me — самоудаление (физическое удаление, hard delete)
+// ---------------------------------------------------------------------------
+
+// TestDeleteMe проверяет полный HTTP-контракт эндпоинта самоудаления:
+// цепочка middleware.CSRF -> Authenticate -> RequireUserOrAdmin -> DeleteMe.
+//   - без CSRF-токена (state-changing запрос) -> 403;
+//   - без access-куки -> 401;
+//   - валидный запрос -> 204, запись удалена из хранилища, refresh-токены отозваны.
+func TestDeleteMe(t *testing.T) {
+	cfg := testConfig()
+
+	// chain — копия боевой цепочки роутера для авторизованной группы.
+	newChain := func(h *UserHandler, store *mockStore) http.Handler {
+		return middleware.CSRF(cfg)(
+			middleware.Authenticate(cfg, store)(
+				middleware.RequireUserOrAdmin(http.HandlerFunc(h.DeleteMe))))
+	}
+
+	withCSRF := func(req *http.Request, token string) *http.Request {
+		req.Header.Set("Origin", "https://app.example")
+		req.AddCookie(&http.Cookie{Name: "csrf_token", Value: token})
+		req.Header.Set("X-CSRF-Token", token)
+		return req
+	}
+
+	t.Run("Без CSRF-токена -> 403 (запрос не доходит до use-case)", func(t *testing.T) {
+		h, store := newUserHandler()
+		user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+		pair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil)
+		req.Header.Set("Origin", "https://app.example") // origin есть, CSRF-пары нет
+		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("Статус = %d, ожидается: 403; body = %s", rec.Code, rec.Body.String())
+		}
+		assertMessage(t, rec, messages.InvalidCSRFToken)
+		got, err := store.GetByID(nilCtx(), user.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "При отказе CSRF аккаунт не должен быть удалён")
+	})
+
+	t.Run("Без аутентификации -> 401", func(t *testing.T) {
+		h, store := newUserHandler()
+		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
+
+		req := withCSRF(httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil), token)
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("Статус = %d, ожидается: 401; body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("Успех: 204, запись физически удалена, все refresh-токены отозваны", func(t *testing.T) {
+		h, store := newUserHandler()
+		user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+		pair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
+
+		// Активная refresh-сессия пользователя (как после /login).
+		refreshHash := uuid.NewString()
+		require.NoError(t, store.Store(nilCtx(), user.ID, refreshHash, time.Now().Add(cfg.RefreshTTL)))
+		tk, err := store.GetActive(nilCtx(), refreshHash)
+		require.NoError(t, err)
+		require.False(t, tk.Revoked)
+
+		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
+		req := withCSRF(httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil), token)
+		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("Статус = %d, ожидается: 204; body = %s", rec.Code, rec.Body.String())
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("204 не должен иметь тела, получено: %s", rec.Body.String())
+		}
+
+		got, err := store.GetByID(nilCtx(), user.ID)
+		if err == nil && got != nil {
+			t.Error("После hard delete запись пользователя должна отсутствовать в хранилище")
+		}
+
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		for _, tk := range store.tokens {
+			if tk.UserID == user.ID && !tk.Revoked {
+				t.Error("После самоудаления у пользователя не должно остаться неотозванных refresh-токенов")
+			}
+		}
+	})
+
+	// Контекст запроса к DELETE /users/me несёт Principal, извлечённый из JWT,
+	// поэтому хендлер может вернуть 409 для уже неактивного аккаунта. Но через
+	// полный HTTP-стек до этого кейса дело не доходит: middleware.Authenticate
+	// отсекает любой не-active пользователь с 401 (защита от использования
+	// access-токенов после блокировки/деактивации — см. middleware_test.go).
+	// Поэтому 409 проверяется напрямую на хендлере, а поведение стека для
+	// удалённого/заблокированного пользователя закрепляется отдельным тестом ниже.
+	t.Run("Самоудаление уже неактивного аккаунта -> 409 (unit-хендлер)", func(t *testing.T) {
+		h, store := newUserHandler()
+		user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+		inactive := *user
+		inactive.Status = domain.StatusInactive
+		store.seedUser(&inactive)
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil)
+		ctx := middleware.ContextWithUser(req.Context(), &middleware.Principal{
+			ID: user.ID, Email: user.Email, Role: user.Role,
+		})
+		h.DeleteMe(rec, req.WithContext(ctx))
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("Статус = %d, ожидается: 409; body = %s", rec.Code, rec.Body.String())
+		}
+		assertMessage(t, rec, messages.AccountAlreadyInactive)
+	})
+
+	t.Run("Неактивный пользователь в HTTP-стеке -> 401 (AuthMiddleware блокирует раньше)", func(t *testing.T) {
+		h, store := newUserHandler()
+		user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+		pair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
+
+		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
+
+		// Блокировка аккаунта админом (status=inactive).
+		status := domain.StatusInactive
+		_, err := store.Update(nilCtx(), user.ID, nil, nil, nil, nil, &status)
+		require.NoError(t, err)
+
+		// Тот же access-токен после деактивации: запрос отклоняется на 401,
+		// не доходя до use-case (повторный 409 через реальный стек невозможен).
+		req := withCSRF(httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil), token)
+		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("Статус = %d, ожидается: 401; body = %s", rec.Code, rec.Body.String())
+		}
+		assertMessage(t, rec, messages.Unauthorized)
+	})
+
+	t.Run("Администратор может удалить себя через /me -> 204 (защита роли admin действует только на DELETE /users/{id})", func(t *testing.T) {
+		h, store := newUserHandler()
+		admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
+		pair, _ := auth.IssuePair(cfg, admin.ID, admin.Email, admin.Role)
+
+		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
+		req := withCSRF(httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil), token)
+		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("Статус = %d, ожидается: 204; body = %s", rec.Code, rec.Body.String())
+		}
+		got, err := store.GetByID(nilCtx(), admin.ID)
+		if err == nil && got != nil {
+			t.Error("Запись администратора должна быть физически удалена: DeleteSelf обходит защиту роли admin")
+		}
+	})
+}
 // ---------------------------------------------------------------------------
 // RBAC: ВЕРТИКАЛЬНАЯ ЭСКАЛАЦИЯ И IDOR ЧЕРЕЗ ПОЛНУЮ ЦЕПОЧКУ MIDDLEWARE
 // ---------------------------------------------------------------------------

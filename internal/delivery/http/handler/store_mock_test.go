@@ -198,6 +198,19 @@ func (s *mockStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// DeleteSelf — физическое удаление собственного аккаунта без ролевой защиты.
+func (s *mockStore) DeleteSelf(ctx context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.usersByID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	delete(s.usersByID, id)
+	delete(s.usersByEmail, u.Email)
+	return nil
+}
+
 // ------------------------- интерфейс TokenStore -------------------------
 
 func (s *mockStore) Store(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
