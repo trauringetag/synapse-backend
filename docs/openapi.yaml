@@ -19,7 +19,7 @@ info:
     - В БД хранится только SHA-256 хеш refresh-токена, не его исходное значение.
     - Схема безопасности `cookieAuth` требует валидную cookie `access_token`; middleware
       проверяет подпись/тип/срок токена и загружает пользователя из БД: он должен
-      существовать и иметь статус `active`, роль также берётся из БД на каждом запросе.
+      существовать и иметь статус `active`, роль также берется из БД на каждом запросе.
       Ошибка чтения БД закрывает доступ (`503 SERVICE_UNAVAILABLE`).
 
     ## CSRF и Origin
@@ -28,15 +28,15 @@ info:
       `middleware.CSRF`, включая публичные `/register`, `/register-admin`, `/login`,
       `/refresh`, `/logout`. Поэтому `security: []` означает отсутствие access/refresh
       аутентификации, но **не** отменяет CSRF-проверку.
-    - Требуется разрешённый источник: `Origin` сверяется с allow-list `CORS_ORIGINS`;
+    - Требуется разрешенный источник: `Origin` сверяется с allow-list `CORS_ORIGINS`;
       если `Origin` отсутствует, используется origin из `Referer`. При отсутствии обоих
-      заголовков или при неразрешённом источнике — `403 FORBIDDEN`
-      («Недопустимый Origin»). Разрешённый `Referer` не может переопределить явно
-      запрещённый `Origin`.
+      заголовков или при неразрешенном источнике — `403 FORBIDDEN`
+      («Недопустимый Origin»). Разрешенный `Referer` не может переопределить явно
+      запрещенный `Origin`.
     - Требуется cookie `csrf_token` и заголовок `X-CSRF-Token` со совпадающим значением
-      (`hmac.Equal`). Токен имеет формат `nonce.HMAC-SHA256(nonce, JWT_SECRET)` и выдаётся
-      `GET /api/v1/csrf` (cookie живёт 1 час, `HttpOnly=false`).
-    - `GET /api/v1/csrf` дополнительно защищён `middleware.RequireAllowedOrigin`:
+      (`hmac.Equal`). Токен имеет формат `nonce.HMAC-SHA256(nonce, JWT_SECRET)` и выдается
+      `GET /api/v1/csrf` (cookie живет 1 час, `HttpOnly=false`).
+    - `GET /api/v1/csrf` дополнительно защищен `middleware.RequireAllowedOrigin`:
       `Origin` обязателен, резервная проверка по `Referer` выполняется только когда
       `Origin` полностью отсутствует.
     - CORS настроен с `Access-Control-Allow-Credentials: true`, методами
@@ -46,7 +46,7 @@ info:
     ## Общие правила транспорта
 
     - JSON тела ограничены 1 MiB (`middleware.LimitBody`, все методы кроме GET/HEAD/OPTIONS):
-      превышение даёт `413 PAYLOAD_TOO_LARGE` («Размер тела запроса превышает допустимый лимит»).
+      превышение дает `413 PAYLOAD_TOO_LARGE` («Размер тела запроса превышает допустимый лимит»).
     - Декодер JSON отклоняет неизвестные поля (`DisallowUnknownFields`) и несколько JSON-значений
       в одном теле: `400 VALIDATION_FAILED` («Некорректное тело JSON»).
     - Ответы помечаются `X-Content-Type-Options: nosniff`; глобальные заголовки
@@ -61,13 +61,13 @@ info:
       `RATE_LIMITED` (429), `PAYLOAD_TOO_LARGE` (413), `INTERNAL_SERVER_ERROR` (500),
       `SERVICE_UNAVAILABLE` (503), `REQUEST_FAILED` (иной код).
     - Rate limiting хранится в PostgreSQL (`api_rate_limits`), fixed window, fail-closed:
-      ошибка хранилища даёт `503 SERVICE_UNAVAILABLE` («Проверка авторизации временно недоступна»),
+      ошибка хранилища дает `503 SERVICE_UNAVAILABLE` («Проверка авторизации временно недоступна»),
       превышение — `429 RATE_LIMITED` («Слишком много запросов») с заголовком `Retry-After`
       (длительность окна в секундах).
 
-    ## Таблица лимитов и ключей счётчиков (по факту router.go)
+    ## Таблица лимитов и ключей счетчиков (по факту router.go)
 
-    | Маршрут | Окно | Порог (env) | Ключ счётчика |
+    | Маршрут | Окно | Порог (env) | Ключ счетчика |
     | --- | --- | --- | --- |
     | `POST /api/v1/login` (1-й limiter) | 15 минут | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login:<IP>:<нормализованный email>` |
     | `POST /api/v1/login` (2-й limiter) | 1 час | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login_global:<email>` либо `login_global:invalid:<IP>` |
@@ -75,23 +75,23 @@ info:
     | `POST /api/v1/register-admin` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
     | `POST /api/v1/refresh` | 1 минута | `REFRESH_RATE_LIMIT`, по умолчанию 30 | `refresh:<SHA-256 cookie>` либо `refresh:<IP>` |
     | `POST /api/v1/logout` | 1 минута | `LOGOUT_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
-    | защищённые `/api/v1/users*` | 1 минута | `AUTHENTICATED_RATE_LIMIT`, по умолчанию 600 | `user:<UUID>` либо `ip:<IP>` |
+    | защищенные `/api/v1/users*` | 1 минута | `AUTHENTICATED_RATE_LIMIT`, по умолчанию 600 | `user:<UUID>` либо `ip:<IP>` |
 
-    Логин защищён **двумя** последовательными фиксированными окнами: 10 запросов за
+    Логин защищен **двумя** последовательными фиксированными окнами: 10 запросов за
     15 минут на пару IP+email и 10 запросов за 1 час на email (при нераспознанном email —
-    на IP). Счётчики увеличиваются на **каждом** запросе, включая успешный вход, поэтому
+    на IP). Счетчики увеличиваются на **каждом** запросе, включая успешный вход, поэтому
     реализация не эквивалентна политике «10 неуспешных попыток». Email извлекается из тела
-    запроса (до 1 MiB); IP берётся из `RemoteAddr` после `chimw.RealIP`, при размещении за
+    запроса (до 1 MiB); IP берется из `RemoteAddr` после `chimw.RealIP`, при размещении за
     reverse proxy доверие к `X-Forwarded-For` определяется конфигурацией прокси.
 
     ## Известные особенности реализации
 
-    - `POST /api/v1/logout` не требует refresh-cookie: без неё возвращается `200` и cookie
-      очищаются; при наличии cookie выполняется отзыв токена, ошибка БД даёт `500`
-      (cookie при этом всё равно очищаются).
+    - `POST /api/v1/logout` не требует refresh-cookie: без нее возвращается `200` и cookie
+      очищаются; при наличии cookie выполняется отзыв токена, ошибка БД дает `500`
+      (cookie при этом все равно очищаются).
     - `POST /api/v1/refresh` при отказе (пустая/невалидная cookie, replay, неактивный
       пользователь) всегда сбрасывает auth-cookie и отвечает `401`; внутренняя ошибка
-      ротации даёт `500 INTERNAL_SERVER_ERROR` («Не удалось выпустить токены»).
+      ротации дает `500 INTERNAL_SERVER_ERROR` («Не удалось выпустить токены»).
       Повторное использование отозванного токена отзывает все сессии пользователя
       и логируется как `security_event=refresh_token_reuse`.
     - Поле `role` принимается только `POST /api/v1/users`; в `PUT`/`PATCH /api/v1/users/{id}`
@@ -103,9 +103,7 @@ info:
     - Удаление собственного аккаунта и любого аккаунта с ролью `admin` запрещено (`403`).
 servers:
   - url: /api/v1
-    description: Префикс версии 1 (внутри приложения)
-  - url: http://localhost:8080/api/v1
-    description: Локальный запуск / Docker Compose (порт хоста задаётся API_HOST_PORT)
+    description: Версия API 1.0
 tags:
   - name: Auth
     description: CSRF-токен, регистрация, вход, ротация токенов, выход
@@ -118,22 +116,22 @@ components:
       in: cookie
       name: access_token
       description: |
-        HttpOnly JWT access-токена (HS256, aud=access). Требуется для защищённых маршрутов.
+        HttpOnly JWT access-токена (HS256, aud=access). Требуется для защищенных маршрутов.
         Middleware проверяет подпись, тип и срок, затем загружает пользователя из БД
-        (обязателен статус `active`, роль берётся из БД).
+        (обязателен статус `active`, роль берется из БД).
     refreshCookie:
       type: apiKey
       in: cookie
       name: refresh_token
       description: |
         HttpOnly JWT refresh-токена (HS256, aud=refresh). Обязателен для `POST /refresh`;
-        для `POST /logout` он необязателен (без cookie вызов всё равно завершается успешно).
+        для `POST /logout` он необязателен (без cookie вызов все равно завершается успешно).
   schemas:
     User:
       type: object
       description: |
         Канонический ответ слоя пользователей (`domain.User`). Поле `password_hash`
-        в JSON никогда не отдаётся (`json:"-"`).
+        в JSON никогда не отдается (`json:"-"`).
       required:
         - id
         - email
@@ -228,7 +226,7 @@ components:
         Ответ служебного маршрута `GET /health` (вне `/api/v1`, поэтому не входит в
         операции этого документа): `{"status": "OK"}` с заголовками
         `Content-Type: application/json` и `Cache-Control: no-store`.
-        Состояние БД в нём **не** проверяется.
+        Состояние БД в нем **не** проверяется.
       required:
         - status
       properties:
@@ -306,7 +304,7 @@ components:
     CreateUserRequest:
       type: object
       description: |
-        Тело `POST /users` (админ). `role` — единственное место, где роль задаётся явно;
+        Тело `POST /users` (админ). `role` — единственное место, где роль задается явно;
         допускается `user` (по умолчанию) или `admin`, другие значения дают `400`.
       required: [email, password, first_name, last_name]
       properties:
@@ -337,7 +335,7 @@ components:
       description: |
         Тело `PUT /users/{id}` (админ, полная замена редактируемых полей).
         Все пять полей обязательны. Поле `role` принимается декодером, но игнорируется:
-        роль пользователя остаётся прежней.
+        роль пользователя остается прежней.
       required: [email, password, first_name, last_name, status]
       properties:
         email:
@@ -369,7 +367,7 @@ components:
       type: object
       description: |
         Тело `PATCH /users/{id}` (админ). Все поля необязательны, но хотя бы одно
-        обязательно. Пустое тело даёт `400` («Пустые данные обновления»,
+        обязательно. Пустое тело дает `400` («Пустые данные обновления»,
         `details.body = ["Укажите хотя бы одно поле"]`).
       minProperties: 1
       properties:
@@ -419,7 +417,7 @@ components:
       type: object
       description: |
         Тело `PATCH /users/me` — частичное обновление профиля. Хотя бы одно поле
-        обязательно; пустое тело даёт `400`.
+        обязательно; пустое тело дает `400`.
       minProperties: 1
       properties:
         email:
@@ -446,12 +444,12 @@ components:
         page:
           type: integer
           minimum: 1
-          description: Фактически применённая страница
+          description: Фактически примененная страница
         limit:
           type: integer
           minimum: 1
           maximum: 100
-          description: Фактически применённый размер страницы
+          description: Фактически примененный размер страницы
         total:
           type: integer
           format: int64
@@ -469,7 +467,7 @@ components:
       schema:
         type: string
     SetCookieCleared:
-      description: Те же cookie, сброшенные до истёкших (`Max-Age=-1`, `Expires=Thu, 01 Jan 1970`).
+      description: Те же cookie, сброшенные до истекших (`Max-Age=-1`, `Expires=Thu, 01 Jan 1970`).
       schema:
         type: string
     SetCookieCsrf:
@@ -494,7 +492,7 @@ components:
       in: path
       name: id
       required: true
-      description: UUID пользователя. Невалидный формат даёт `400` («Неверный идентификатор пользователя»).
+      description: UUID пользователя. Невалидный формат дает `400` («Неверный идентификатор пользователя»).
       schema:
         type: string
         format: uuid
@@ -536,7 +534,7 @@ components:
       in: query
       name: role
       required: false
-      description: Фильтр по роли (`user` или `admin`); недопустимое значение даёт `400`.
+      description: Фильтр по роли (`user` или `admin`); недопустимое значение дает `400`.
       schema:
         type: string
         enum: [user, admin]
@@ -544,7 +542,7 @@ components:
       in: query
       name: status
       required: false
-      description: Фильтр по статусу (`active` или `inactive`); недопустимое значение даёт `400`.
+      description: Фильтр по статусу (`active` или `inactive`); недопустимое значение дает `400`.
       schema:
         type: string
         enum: [active, inactive]
@@ -601,7 +599,7 @@ components:
         `401 UNAUTHORIZED` — отсутствие или недействительность аутентификации.
         Возможные сообщения: «Необходима авторизация для получения доступа»,
         «Недействительный или просроченный Access-токен», «Недопустимый токен субъекта»,
-        «Не авторизован» (пользователь удалён или неактивен),
+        «Не авторизован» (пользователь удален или неактивен),
         «Неверные данные авторизации (email или пароль)»,
         «Отсутствует Cookie-файл Refresh-токена»,
         «Недействительный или просроченный Refresh-токен».
@@ -635,7 +633,7 @@ components:
     NotFound:
       description: |
         `404 NOT_FOUND` — ресурс не найден. Сообщение «Пользователь не найден»
-        (для защищённых маршрутов пользователь мог быть удалён между запросами).
+        (для защищенных маршрутов пользователь мог быть удален между запросами).
       headers:
         Cache-Control:
           $ref: '#/components/headers/CacheControlNoStore'
@@ -731,9 +729,9 @@ paths:
       description: |
         Возвращает подписанный токен `nonce.HMAC-SHA256(nonce, JWT_SECRET)` и устанавливает
         cookie `csrf_token` (`Path=/api/v1/`, `Max-Age=3600`, **не** HttpOnly).
-        Защищён `RequireAllowedOrigin`: требуется `Origin` из `CORS_ORIGINS`;
+        Защищен `RequireAllowedOrigin`: требуется `Origin` из `CORS_ORIGINS`;
         при отсутствии `Origin` допускается `Referer`. Оба заголовка отсутствуют или
-        источник неразрешён — `403`. Access/refresh-аутентификация не требуется,
+        источник неразрешен — `403`. Access/refresh-аутентификация не требуется,
         лимитер не применяется.
       operationId: getCsrfToken
       security: []
@@ -752,7 +750,7 @@ paths:
               example:
                 csrf_token: 9J2x...KfQ.uV1h...z3A
         '403':
-          description: Отсутствует или неразрешён источник запроса
+          description: Отсутствует или неразрешен источник запроса
           content:
             application/json:
               schema:
@@ -774,8 +772,8 @@ paths:
       tags: [Auth]
       summary: Регистрация обычного пользователя
       description: |
-        Создаёт пользователя с ролью `user` и статусом `active`. Требует CSRF
-        (cookie `csrf_token` + `X-CSRF-Token`) и разрешённый Origin/Referer.
+        Создает пользователя с ролью `user` и статусом `active`. Требует CSRF
+        (cookie `csrf_token` + `X-CSRF-Token`) и разрешенный Origin/Referer.
         Лимитер — 10 запросов в час на IP. Пароль хешируется bcrypt (DefaultCost).
         Cookie при регистрации не устанавливаются.
       operationId: registerUser
@@ -820,10 +818,10 @@ paths:
       tags: [Auth]
       summary: Регистрация администратора по секрету
       description: |
-        Создаёт пользователя с ролью `admin`. Секрет передаётся **только** в заголовке
+        Создает пользователя с ролью `admin`. Секрет передается **только** в заголовке
         `X-Admin-Token` (значение `ADMIN_REGISTER_TOKEN`) и сравнивается constant-time.
         Порядок проверок: сначала валидация полей (`400`), затем секрет (`403`).
-        Требует CSRF и разрешённый Origin/Referer; лимитер — 10 запросов в час на IP.
+        Требует CSRF и разрешенный Origin/Referer; лимитер — 10 запросов в час на IP.
       operationId: registerAdmin
       security: []
       parameters:
@@ -891,13 +889,13 @@ paths:
       tags: [Auth]
       summary: Вход в систему
       description: |
-        Проверяет учётные данные (bcrypt, с защитой от timing-атак через фиктивный хеш),
+        Проверяет учетные данные (bcrypt, с защитой от timing-атак через фиктивный хеш),
         убеждается что пользователь активен, выпускает JWT-пару и сохраняет SHA-256 хеш
         refresh-токена в БД. При успехе устанавливает HttpOnly cookie `access_token`
-        и `refresh_token`. Требует CSRF и разрешённый Origin/Referer.
+        и `refresh_token`. Требует CSRF и разрешенный Origin/Referer.
         Лимитеры: 10 запросов за 15 минут на IP+email и 10 запросов за час на email;
-        счётчик растёт на любом запросе, включая успешный вход.
-        Неверные учётные данные и несуществующий пользователь дают одинаковый `401`.
+        счетчик растет на любом запросе, включая успешный вход.
+        Неверные учетные данные и несуществующий пользователь дают одинаковый `401`.
       operationId: login
       security: []
       requestBody:
@@ -937,7 +935,7 @@ paths:
                 error: VALIDATION_FAILED
                 message: Некорректное тело JSON
         '401':
-          description: Неверные учётные данные или вход запрещён (пользователь неактивен/удалён)
+          description: Неверные учетные данные или вход запрещен (пользователь неактивен/удален)
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControlNoStore'
@@ -986,7 +984,7 @@ paths:
         и записывает новый хеш. При успехе устанавливает новую пару cookie.
         Любой отказ (пустая/невалидная/просроченная cookie, unknown hash, replay,
         неактивный пользователь) приводит к сбросу auth-cookie и `401`.
-        Replay отзывает все сессии пользователя. Требуются CSRF и разрешённый Origin/Referer.
+        Replay отзывает все сессии пользователя. Требуются CSRF и разрешенный Origin/Referer.
         Лимитер — 30 запросов в минуту по хешу cookie (по IP, если cookie нет).
       operationId: refreshTokens
       security:
@@ -1008,7 +1006,7 @@ paths:
         '401':
           description: |
             Refresh-токен отсутствует, недействителен, просрочен, отозван (replay)
-            или принадлежит неактивому/удалённому пользователю. Auth-cookie сброшены.
+            или принадлежит неактивому/удаленному пользователю. Auth-cookie сброшены.
           headers:
             Set-Cookie:
               $ref: '#/components/headers/SetCookieCleared'
@@ -1049,8 +1047,8 @@ paths:
       summary: Выход из системы
       description: |
         Очищает cookie `access_token` и `refresh_token`. Если cookie `refresh_token`
-        присутствует, отзывает соответствующий токен в БД; без cookie вызов всё равно
-        завершается `200` (ничего не отзывается). Требуются CSRF и разрешённый Origin/Referer.
+        присутствует, отзывает соответствующий токен в БД; без cookie вызов все равно
+        завершается `200` (ничего не отзывается). Требуются CSRF и разрешенный Origin/Referer.
         Лимитер — 10 запросов в минуту на IP.
       operationId: logout
       security:
@@ -1079,7 +1077,7 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           description: |
-            Не удалось отозвать refresh-токен в БД. Auth-cookie всё равно очищаются.
+            Не удалось отозвать refresh-токен в БД. Auth-cookie все равно очищаются.
           headers:
             Set-Cookie:
               $ref: '#/components/headers/SetCookieCleared'
@@ -1127,7 +1125,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Пользователь не найден (аккаунт удалён после прохождения middleware)
+          description: Пользователь не найден (аккаунт удален после прохождения middleware)
           content:
             application/json:
               schema:
@@ -1152,7 +1150,7 @@ paths:
         Заменяет email, имя и фамилию текущего пользователя. Роль и статус изменить нельзя;
         поля `password`, `role`, `status` в теле не принимаются (неизвестные поля → `400`).
         `updated_at` обновляется только при фактическом изменении значений.
-        Требуются CSRF и разрешённый Origin/Referer.
+        Требуются CSRF и разрешенный Origin/Referer.
       operationId: replaceMe
       security:
         - cookieAuth: []
@@ -1168,7 +1166,7 @@ paths:
               last_name: Lovelace-Byron
       responses:
         '200':
-          description: Профиль обновлён
+          description: Профиль обновлен
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControlNoStore'
@@ -1210,9 +1208,9 @@ paths:
       summary: Частичное обновление собственного профиля
       description: |
         Обновляет переданные поля (`email`, `first_name`, `last_name`). Пустое тело
-        или тело без одного из этих полей даёт `400` («Пустые данные обновления»,
+        или тело без одного из этих полей дает `400` («Пустые данные обновления»,
         `details.body = ["Укажите хотя бы одно поле"]`). Роль и статус недоступны.
-        Требуются CSRF и разрешённый Origin/Referer.
+        Требуются CSRF и разрешенный Origin/Referer.
       operationId: patchMe
       security:
         - cookieAuth: []
@@ -1226,7 +1224,7 @@ paths:
               first_name: Ada King
       responses:
         '200':
-          description: Профиль обновлён
+          description: Профиль обновлен
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControlNoStore'
@@ -1346,8 +1344,8 @@ paths:
       tags: [Users]
       summary: Создание пользователя (админ)
       description: |
-        Только роль `admin`. Создаёт пользователя с указанной ролью (`user` по умолчанию)
-        и статусом `active`. Пароль хешируется bcrypt. Требуются CSRF и разрешённый
+        Только роль `admin`. Создает пользователя с указанной ролью (`user` по умолчанию)
+        и статусом `active`. Пароль хешируется bcrypt. Требуются CSRF и разрешенный
         Origin/Referer, а также cookie `access_token`.
       operationId: createUser
       security:
@@ -1450,7 +1448,7 @@ paths:
         `status`. Хеш пароля перезаписывается всегда. Существующая роль сохраняется:
         принятое, но игнорируемое поле `role` не является способом повышения/понижения.
         Сессии (refresh-токены) пользователя при этом **не** отзываются.
-        Требуются CSRF и разрешённый Origin/Referer.
+        Требуются CSRF и разрешенный Origin/Referer.
       operationId: replaceUser
       security:
         - cookieAuth: []
@@ -1505,7 +1503,7 @@ paths:
         Только роль `admin`. Допустимы `email`, `password`, `first_name`, `last_name`,
         `status`; нужно передать хотя бы одно поле. Поле `role` игнорируется.
         При смене пароля все refresh-токены пользователя отзываются (ошибка отзыва
-        только логируется и не меняет успешный ответ). Требуются CSRF и разрешённый Origin/Referer.
+        только логируется и не меняет успешный ответ). Требуются CSRF и разрешенный Origin/Referer.
       operationId: patchUser
       security:
         - cookieAuth: []
@@ -1567,17 +1565,17 @@ paths:
       tags: [Users]
       summary: Удаление пользователя (админ)
       description: |
-        Только роль `admin`. Нельзя удалить собственную учётную запись (`403`,
+        Только роль `admin`. Нельзя удалить собственную учетную запись (`403`,
         «Администратор не может удалить собственную учетную запись») и любой аккаунт
         с ролью `admin` (`403`, «Нельзя удалить учетную запись администратора» —
         репозиторий возвращает `domain.ErrProtected`). Каскадно удаляются refresh-токены
-        пользователя. Требуются CSRF и разрешённый Origin/Referer.
+        пользователя. Требуются CSRF и разрешенный Origin/Referer.
       operationId: deleteUser
       security:
         - cookieAuth: []
       responses:
         '204':
-          description: Пользователь удалён (тело ответа отсутствует)
+          description: Пользователь удален (тело ответа отсутствует)
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControlNoStore'
@@ -1590,7 +1588,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Недостаточно прав либо удаление защищённой учётной записи
+          description: Недостаточно прав либо удаление защищенной учетной записи
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControlNoStore'
