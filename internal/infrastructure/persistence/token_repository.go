@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
@@ -120,15 +121,28 @@ func (r *TokenRepository) Rotate(
 }
 
 func (r *TokenRepository) Revoke(ctx context.Context, tokenHash string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.exec(ctx, `
 		UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1
 	`, tokenHash)
 	return err
 }
 
+// RevokeAllForUser отзывает все активные refresh-токены пользователя.
+// Если в контексте есть активная транзакция UnitOfWork (domain.TxFromContext),
+// UPDATE выполняется внутри неё — это даёт атомарность операций
+// «смена пароля/удаление + отзыв сессий» на уровне use-case.
 func (r *TokenRepository) RevokeAllForUser(ctx context.Context, userID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.exec(ctx, `
 		UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE
 	`, userID)
 	return err
+}
+
+// exec выполняет запрос внутри транзакции из контекста (Unit of Work), если
+// она открыта; иначе — напрямую через пул соединений.
+func (r *TokenRepository) exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
+	if tx, ok := domain.TxFromContext(ctx); ok {
+		return tx.Exec(ctx, q, args...)
+	}
+	return r.pool.Exec(ctx, q, args...)
 }

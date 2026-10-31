@@ -22,5 +22,7 @@ func newAuthUC(cfg *config.Config, store *mockStore) usecase.AuthUseCase {
 }
 
 func newUserUC(store *mockStore) usecase.UserUseCase {
-	return usecase.NewUserUseCase(store, store, auth.NewBcryptHasher())
+	// Unit of Work в unit-тестах HTTP-слоя не нужен: in-memory мок не имеет
+	// транзакций, поэтому передаём nil (use-case выполнит операции напрямую).
+	return usecase.NewUserUseCase(store, store, nil, auth.NewBcryptHasher())
 }

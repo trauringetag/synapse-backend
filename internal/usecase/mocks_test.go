@@ -50,6 +50,13 @@ type MockUserRepository struct {
 	ReplaceFunc        func(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error)
 	DeleteFunc         func(ctx context.Context, id uuid.UUID) error
 	DeleteSelfFunc     func(ctx context.Context, id uuid.UUID) error
+	// Транзакционные варианты (Unit of Work). Если *TxFunc не задан, метод
+	// делегирует нетранзакционному аналогу — это позволяет существующим
+	// тестам продолжать работать, а новым — проверять вызов именно Tx-версии.
+	UpdateTxFunc     func(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error)
+	ReplaceTxFunc    func(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error)
+	DeleteTxFunc     func(ctx context.Context, id uuid.UUID) error
+	DeleteSelfTxFunc func(ctx context.Context, id uuid.UUID) error
 }
 
 var _ domain.UserRepository = (*MockUserRepository)(nil)
@@ -152,6 +159,125 @@ func (m *MockUserRepository) DeleteSelf(ctx context.Context, id uuid.UUID) error
 		return m.DeleteSelfFunc(ctx, id)
 	}
 	return errMockNotConfigured
+}
+
+// ---------- Транзакционные методы (Unit of Work) ----------
+
+func (m *MockUserRepository) UpdateTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	m.record("UpdateTx", id, email, firstName, lastName, passwordHash, status)
+	if m.UpdateTxFunc != nil {
+		return m.UpdateTxFunc(ctx, id, email, firstName, lastName, passwordHash, status)
+	}
+	if m.UpdateFunc != nil {
+		return m.UpdateFunc(ctx, id, email, firstName, lastName, passwordHash, status)
+	}
+	return nil, errMockNotConfigured
+}
+
+func (m *MockUserRepository) ReplaceTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	m.record("ReplaceTx", id, email, firstName, lastName, passwordHash, status)
+	if m.ReplaceTxFunc != nil {
+		return m.ReplaceTxFunc(ctx, id, email, firstName, lastName, passwordHash, status)
+	}
+	if m.ReplaceFunc != nil {
+		return m.ReplaceFunc(ctx, id, email, firstName, lastName, passwordHash, status)
+	}
+	return nil, errMockNotConfigured
+}
+
+func (m *MockUserRepository) DeleteTx(ctx context.Context, id uuid.UUID) error {
+	m.record("DeleteTx", id)
+	if m.DeleteTxFunc != nil {
+		return m.DeleteTxFunc(ctx, id)
+	}
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id)
+	}
+	return errMockNotConfigured
+}
+
+func (m *MockUserRepository) DeleteSelfTx(ctx context.Context, id uuid.UUID) error {
+	m.record("DeleteSelfTx", id)
+	if m.DeleteSelfTxFunc != nil {
+		return m.DeleteSelfTxFunc(ctx, id)
+	}
+	if m.DeleteSelfFunc != nil {
+		return m.DeleteSelfFunc(ctx, id)
+	}
+	return errMockNotConfigured
+}
+
+// ---------- UnitOfWork ----------
+
+// fakeUnitOfWork — мок порта domain.UnitOfWork для проверки атомарности.
+// Run имитирует транзакцию: помечает её «открытой» (txDepth), вызывает fn,
+// при ошибке fn «откатывает» (rollbackCount+1), при успехе — «коммитит»
+// (commitCount+1). Дополнительно фиксирует, был ли fn запущен внутри
+// транзакции (в контексте присутствует pgx.Tx-заглушка через marker-значение),
+// чтобы тесты могли убедиться, что use-case выполняет репозиторные вызовы
+// именно внутри UoW.
+type fakeUnitOfWork struct {
+	mu          sync.Mutex
+	runCalls    int
+	commitCount int
+	rollbackCnt int
+	inTxSeen    bool  // хотя бы один Run вызвал fn внутри «транзакции»
+	failRunOnce error // если задано — первый Run вернёт ошибку ДО вызова fn
+}
+
+var _ domain.UnitOfWork = (*fakeUnitOfWork)(nil)
+
+// txMarkerKey — маркер «мы внутри транзакции» для мока (в продуктиве это pgx.Tx).
+type txMarkerKey struct{}
+
+func (u *fakeUnitOfWork) Run(ctx context.Context, fn func(ctx context.Context) error) error {
+	u.mu.Lock()
+	u.runCalls++
+	fail := u.failRunOnce
+	u.mu.Unlock()
+
+	if fail != nil {
+		return fail
+	}
+
+	txCtx := context.WithValue(ctx, txMarkerKey{}, struct{ open bool }{true})
+	err := fn(txCtx)
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.inTxSeen = true
+	if err != nil {
+		u.rollbackCnt++
+		return err
+	}
+	u.commitCount++
+	return nil
+}
+
+// RunCount / Commits / Rollbacks — счётчики для ассертов.
+func (u *fakeUnitOfWork) RunCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.runCalls
+}
+
+func (u *fakeUnitOfWork) Commits() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.commitCount
+}
+
+func (u *fakeUnitOfWork) Rollbacks() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.rollbackCnt
+}
+
+// InTx reports whether the last Run observed a transactional context.
+func (u *fakeUnitOfWork) InTx() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.inTxSeen
 }
 
 // ---------- RefreshTokenRepository ----------

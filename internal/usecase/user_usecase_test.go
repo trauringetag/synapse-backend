@@ -26,6 +26,7 @@ type userFixture struct {
 	users  *MockUserRepository
 	tokens *MockTokenRepository
 	hasher *MockPasswordHasher
+	uow    *fakeUnitOfWork
 	uc     *UserUseCaseImpl
 }
 
@@ -34,8 +35,9 @@ func newUserFixture() *userFixture {
 		users:  &MockUserRepository{},
 		tokens: &MockTokenRepository{},
 		hasher: &MockPasswordHasher{},
+		uow:    &fakeUnitOfWork{},
 	}
-	f.uc = NewUserUseCase(f.users, f.tokens, f.hasher)
+	f.uc = NewUserUseCase(f.users, f.tokens, f.uow, f.hasher)
 	return f
 }
 
@@ -741,16 +743,23 @@ func TestUserUseCase_AdminUpdate_WithPasswordChange_RevokesSessions(t *testing.T
 	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"), "RevokeAllForUser должен быть вызван ровно один раз")
 }
 
-func TestUserUseCase_AdminUpdate_RevokeFailure_StillSucceeds(t *testing.T) {
-	// Сбой отзыва сессий не должен ломать уже выполненное обновление:
-	// пользователь обновлён, ошибка только логируется.
+func TestUserUseCase_AdminUpdate_RevokeFailure_RollsBackUpdate(t *testing.T) {
+	// Атомарность (Задача 2): сбой отзыва сессий обязан откатить смену пароля.
+	// Обновление выполняется внутри транзакции UnitOfWork (UpdateTx +
+	// RevokeAllForUser); ошибка любой из операций -> ROLLBACK и внутренняя
+	// ошибка use-case. Прежняя политика «ошибка только логируется» нарушала
+	// критерий приёмки: украденный refresh-токен оставался живым после
+	// админского сброса пароля.
 	f := newUserFixture()
 	userID := uuid.New()
-	f.users.UpdateFunc = func(_ context.Context, _ uuid.UUID, _, _, _, _, _ *string) (*domain.User, error) {
+	revokeErr := errors.New("db timeout")
+
+	f.users.UpdateTxFunc = func(_ context.Context, _ uuid.UUID, _, _, _, passwordHash, _ *string) (*domain.User, error) {
+		require.NotNil(t, passwordHash, "смена пароля должна идти транзакционным методом UpdateTx")
 		return sampleUser(userID), nil
 	}
 	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error {
-		return errors.New("db timeout")
+		return revokeErr
 	}
 
 	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
@@ -758,9 +767,14 @@ func TestUserUseCase_AdminUpdate_RevokeFailure_StillSucceeds(t *testing.T) {
 		Password: strPtr("newpassword123"),
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, user)
+	require.Error(t, err)
+	assert.Nil(t, user, "при сбое отзыва сессий обновление не считается успешным")
+	ue := requireUseCaseErr(t, err, ErrCodeInternal)
+	assert.Equal(t, messages.FailedToRevokeSessions, ue.Message)
+	assert.ErrorIs(t, err, revokeErr)
 	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
+	assert.Equal(t, 1, f.uow.Rollbacks(), "транзакция должна быть откачена")
+	assert.Zero(t, f.uow.Commits())
 }
 
 func TestUserUseCase_AdminUpdate_ValidationErrors(t *testing.T) {
@@ -934,8 +948,8 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 
 		getFunc        func(ctx context.Context, id uuid.UUID) (*domain.User, error)
 		revokeFunc     func(ctx context.Context, id uuid.UUID) error
-		deleteFunc     func(ctx context.Context, id uuid.UUID) error
-		deleteSelfFunc func(ctx context.Context, id uuid.UUID) error
+		deleteFunc     func(ctx context.Context, id uuid.UUID) error // DeleteTx
+		deleteSelfFunc func(ctx context.Context, id uuid.UUID) error // DeleteSelfTx
 
 		wantErr     bool
 		wantCode    ErrorCode
@@ -981,17 +995,22 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 			wantDeletes: 0,
 		},
 		{
-			name: "revoke failure is logged but operation continues (record still deleted)",
+			name: "revoke failure aborts delete (transaction rollback, record kept)",
 			getFunc: func(_ context.Context, id uuid.UUID) (*domain.User, error) {
 				return sampleUser(id), nil
 			},
 			revokeFunc: func(_ context.Context, _ uuid.UUID) error {
 				return errors.New("token store timeout")
 			},
-			deleteFunc:  func(_ context.Context, _ uuid.UUID) error { return nil },
-			wantErr:     false, // частичный сбой отзыва не откатывает удаление
+			deleteFunc: func(_ context.Context, _ uuid.UUID) error {
+				t.Fatal("DeleteTx не должен вызываться при сбое отзыва сессий")
+				return nil
+			},
+			wantErr:     true,
+			wantCode:    ErrCodeInternal,
+			wantMessage: messages.FailedToRevokeSessions,
 			wantRevokes: 1,
-			wantDeletes: 1,
+			wantDeletes: 0, // удаление отменено: либо удалён И отозван, либо ничего
 		},
 		{
 			name: "delete DB error -> internal error",
@@ -1087,10 +1106,10 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 				f.tokens.RevokeAllForUserFunc = tt.revokeFunc
 			}
 			if tt.deleteFunc != nil {
-				f.users.DeleteFunc = tt.deleteFunc
+				f.users.DeleteTxFunc = tt.deleteFunc
 			}
 			if tt.deleteSelfFunc != nil {
-				f.users.DeleteSelfFunc = tt.deleteSelfFunc
+				f.users.DeleteSelfTxFunc = tt.deleteSelfFunc
 			}
 
 			err := f.uc.DeleteMe(context.Background(), userID)
@@ -1108,10 +1127,10 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 
 			assert.Equal(t, tt.wantRevokes, f.tokens.CountCalls("RevokeAllForUser"),
 				"количество вызовов RevokeAllForUser")
-			assert.Equal(t, tt.wantDeletes, f.users.CountCalls("Delete"),
-				"количество вызовов users.Delete")
+			assert.Equal(t, tt.wantDeletes, f.users.CountCalls("DeleteTx"),
+				"количество вызовов users.DeleteTx")
 
-			// Порядок вызовов при успехе: GetByID -> Delete (или DeleteSelf для
+			// Порядок вызовов при успехе: GetByID -> DeleteTx (или DeleteSelfTx для
 			// admin-аккаунта), причём отзыв сессий выполняется строго перед
 			// физическим удалением.
 			if !tt.wantErr && tt.wantDeletes == 1 {
@@ -1121,7 +1140,7 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 				}
 				require.GreaterOrEqual(t, len(seq), 2)
 				assert.Equal(t, "GetByID", seq[0])
-				assert.Contains(t, []string{"Delete", "DeleteSelf"}, seq[len(seq)-1])
+				assert.Contains(t, []string{"DeleteTx", "DeleteSelfTx"}, seq[len(seq)-1])
 				assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
 			}
 		})
@@ -1222,10 +1241,12 @@ func TestUserUseCase_AdminDelete_RevokeFailure_AbortsDelete(t *testing.T) {
 	err := f.uc.Delete(context.Background(), DeleteUserInput{TargetID: target, PrincipalID: principal})
 
 	ue := requireUseCaseErr(t, err, ErrCodeInternal)
-	assert.Equal(t, messages.FailedToDeleteUser, ue.Message)
+	assert.Equal(t, messages.FailedToRevokeSessions, ue.Message)
 	assert.ErrorIs(t, err, revokeErr)
-	assert.Zero(t, f.users.CountCalls("Delete"))
+	assert.Zero(t, f.users.CountCalls("DeleteTx"), "удаление не должно выполняться при сбое отзыва")
 	assert.Equal(t, 1, f.tokens.CountCalls("RevokeAllForUser"))
+	assert.Equal(t, 1, f.uow.Rollbacks(), "транзакция откатывается целиком")
+	assert.Zero(t, f.uow.Commits())
 }
 
 // ---------- Классификация ошибок (HTTP-адаптер) ----------
@@ -1257,3 +1278,157 @@ func TestUseCaseError_UnwrapAndMessages(t *testing.T) {
 }
 
 var _ = time.Now // на случай расширения тестов работой со временем
+
+// ---------- Атомарность отзыва сессий (Задача 2, критерии приёмки) ----------
+
+func TestUserUseCase_AdminReplace_RevokesSessionsInTransaction(t *testing.T) {
+	// PUT /users/{id} всегда содержит новый пароль => замена карточки и отзыв
+	// всех refresh-токенов обязаны выполняться в ОДНОЙ транзакции UnitOfWork
+	// (ReplaceTx + RevokeAllForUser), причём именно транзакционными методами.
+	f := newUserFixture()
+	id := uuid.New()
+
+	var order []string
+	f.users.ReplaceTxFunc = func(_ context.Context, got uuid.UUID, email, first, last, passwordHash, status string) (*domain.User, error) {
+		order = append(order, "ReplaceTx")
+		return &domain.User{ID: got, Email: email, Status: status, FirstName: first, LastName: last}, nil
+	}
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, uid uuid.UUID) error {
+		require.Equal(t, id, uid)
+		order = append(order, "RevokeAllForUser")
+		return nil
+	}
+
+	user, err := f.uc.AdminReplace(context.Background(), validAdminReplaceInput(id))
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, []string{"ReplaceTx", "RevokeAllForUser"}, order)
+	assert.Zero(t, f.users.CountCalls("Replace"), "нетранзакционный Replace вызываться не должен")
+	assert.Equal(t, 1, f.uow.RunCount(), "операция должна идти внутри одной транзакции")
+	assert.Equal(t, 1, f.uow.Commits())
+	assert.Zero(t, f.uow.Rollbacks())
+}
+
+func TestUserUseCase_AdminReplace_RevokeFailure_RollsBackPasswordChange(t *testing.T) {
+	// Ключевой сценарий Задачи 2: если отзыв сессий падает, транзакция
+	// откатывается — смена пароля НЕ считается успешной. Иначе злоумышленник
+	// с украденным refresh-токеном сохраняет доступ после админского сброса.
+	f := newUserFixture()
+	id := uuid.New()
+	revokeErr := errors.New("token store unavailable")
+
+	f.users.ReplaceTxFunc = func(_ context.Context, _ uuid.UUID, _, _, _, _, _ string) (*domain.User, error) {
+		return sampleUser(id), nil
+	}
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error {
+		return revokeErr
+	}
+
+	user, err := f.uc.AdminReplace(context.Background(), validAdminReplaceInput(id))
+
+	require.Error(t, err)
+	assert.Nil(t, user, "при сбое отзыва результат замены не возвращаются")
+	ue := requireUseCaseErr(t, err, ErrCodeInternal)
+	assert.Equal(t, messages.FailedToRevokeSessions, ue.Message)
+	assert.ErrorIs(t, err, revokeErr)
+	assert.Equal(t, 1, f.uow.Rollbacks(), "транзакция обязана быть откачена")
+	assert.Zero(t, f.uow.Commits())
+}
+
+func TestUserUseCase_AdminUpdate_WithPassword_UsesTransaction(t *testing.T) {
+	// PATCH со сменой пароля обязан идти через UpdateTx внутри UoW;
+	// обычные обновления (без пароля/деактивации) — без транзакции.
+	f := newUserFixture()
+	id := uuid.New()
+	f.users.UpdateTxFunc = func(_ context.Context, got uuid.UUID, _, _, _, passwordHash, _ *string) (*domain.User, error) {
+		require.NotNil(t, passwordHash)
+		u := sampleUser(got)
+		u.PasswordHash = *passwordHash
+		return u, nil
+	}
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error { return nil }
+
+	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
+		ID:       id,
+		Password: strPtr("brand-new-password"),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, 1, f.users.CountCalls("UpdateTx"))
+	assert.Zero(t, f.users.CountCalls("Update"), "смена пароля не должна идти нетранзакционным методом")
+	assert.Equal(t, 1, f.uow.RunCount())
+	assert.Equal(t, 1, f.uow.Commits())
+}
+
+func TestUserUseCase_AdminDelete_UsesTransactionAndCommits(t *testing.T) {
+	// DELETE /users/{id}: RevokeAllForUser + DeleteTx в одной транзакции.
+	f := newUserFixture()
+	target, principal := uuid.New(), uuid.New()
+	var order []string
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error {
+		order = append(order, "RevokeAllForUser")
+		return nil
+	}
+	f.users.DeleteTxFunc = func(_ context.Context, id uuid.UUID) error {
+		require.Equal(t, target, id)
+		order = append(order, "DeleteTx")
+		return nil
+	}
+
+	err := f.uc.Delete(context.Background(), DeleteUserInput{TargetID: target, PrincipalID: principal})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"RevokeAllForUser", "DeleteTx"}, order)
+	assert.Zero(t, f.users.CountCalls("Delete"), "нетранзакционный Delete вызываться не должен")
+	assert.Equal(t, 1, f.uow.RunCount())
+	assert.Equal(t, 1, f.uow.Commits())
+}
+
+func TestUserUseCase_DeleteMe_RevokeFailure_RollbacksAccountDeletion(t *testing.T) {
+	// Самоудаление: сбой отзыва сессий откатывает удаление аккаунта —
+	// операция остаётся повторяемой, «висячих» состояний нет.
+	f := newUserFixture()
+	id := uuid.New()
+	revokeErr := errors.New("token store timeout")
+
+	f.users.GetByIDFunc = func(_ context.Context, got uuid.UUID) (*domain.User, error) {
+		return sampleUser(got), nil
+	}
+	f.tokens.RevokeAllForUserFunc = func(_ context.Context, _ uuid.UUID) error { return revokeErr }
+	f.users.DeleteTxFunc = func(_ context.Context, _ uuid.UUID) error {
+		t.Fatal("DeleteTx не должен вызываться при сбое отзыва сессий")
+		return nil
+	}
+
+	err := f.uc.DeleteMe(context.Background(), id)
+
+	ue := requireUseCaseErr(t, err, ErrCodeInternal)
+	assert.Equal(t, messages.FailedToRevokeSessions, ue.Message)
+	assert.ErrorIs(t, err, revokeErr)
+	assert.Zero(t, f.users.CountCalls("DeleteTx"))
+	assert.Equal(t, 1, f.uow.Rollbacks())
+	assert.Zero(t, f.uow.Commits())
+}
+
+func TestUserUseCase_AdminUpdate_EmailOnly_NoTransaction(t *testing.T) {
+	// Обновление без смены пароля/деактивации не требует отзыва сессий
+	// и выполняется одним запросом без транзакции UoW.
+	f := newUserFixture()
+	id := uuid.New()
+	f.users.UpdateFunc = func(_ context.Context, got uuid.UUID, _, _, _, _, _ *string) (*domain.User, error) {
+		return sampleUser(got), nil
+	}
+
+	user, err := f.uc.AdminUpdate(context.Background(), AdminUpdateUserInput{
+		ID:    id,
+		Email: strPtr("other@example.com"),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Zero(t, f.uow.RunCount(), "UoW не используется для обновлений без отзыва сессий")
+	assert.Zero(t, f.users.CountCalls("UpdateTx"))
+	assert.Equal(t, 0, f.tokens.CountCalls("RevokeAllForUser"))
+}

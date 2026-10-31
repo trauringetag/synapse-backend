@@ -10,11 +10,11 @@ import (
 
 	"github.com/trauringetag/synapse-backend/docs"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
-	"github.com/trauringetag/synapse-backend/internal/infrastructure/database"
+	db "github.com/trauringetag/synapse-backend/internal/infrastructure/database"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/jobs"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/persistence"
 	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
-	"github.com/trauringetag/synapse-backend/internal/infrastructure/transport"
+	router "github.com/trauringetag/synapse-backend/internal/infrastructure/transport"
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
@@ -40,6 +40,10 @@ func main() {
 
 	users := persistence.NewUserRepository(pool)
 	tokens := persistence.NewTokenRepository(pool)
+	// Unit of Work — транзакционный порт поверх того же пула: позволяет
+	// выполнять «смена пароля + отзыв сессий» и «удаление + отзыв сессий»
+	// атомарно в одной транзакции БД (Задача 2).
+	uow := persistence.NewUnitOfWork(pool)
 	// Реализация порта domain.RateLimitStore: вся работа с БД для лимитов
 	// запросов инкапсулирована в инфраструктурном слое (репозитории),
 	// middleware получает только интерфейс.
@@ -63,7 +67,7 @@ func main() {
 	jwtService := auth.NewJWTService(cfg)
 	csrfService := auth.NewCSRFService(cfg)
 	authUC := usecase.NewAuthUseCase(users, tokens, hasher, jwtService, csrfService, cfg.AdminRegisterToken)
-	userUC := usecase.NewUserUseCase(users, tokens, hasher)
+	userUC := usecase.NewUserUseCase(users, tokens, uow, hasher)
 
 	handler := router.New(cfg, authUC, userUC, users, rateLimitRepo, docs.OpenAPI)
 

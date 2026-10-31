@@ -123,9 +123,24 @@ func (r *UserRepository) ReplaceProfile(ctx context.Context, id uuid.UUID, email
 	return &u, nil
 }
 
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
-	var u domain.User
-	err := r.pool.QueryRow(ctx, `
+// dbQuerier — абстракция «исполнителя запросов» pgx: единый интерфейс для
+// *pgxpool.Pool и pgx.Tx. Позволяет одному SQL-телу работать и вне
+// транзакции (pool), и внутри неё (tx из контекста UnitOfWork).
+type dbQuerier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// querier возвращает исполнителя для ctx: транзакцию из контекста
+// (Unit of Work), если она открыта, иначе пул соединений.
+func (r *UserRepository) querier(ctx context.Context) dbQuerier {
+	if tx, ok := domain.TxFromContext(ctx); ok {
+		return tx
+	}
+	return r.pool
+}
+
+const updateSQL = `
 		UPDATE users SET
 			email = COALESCE($2, email),
 			first_name = COALESCE($3, first_name),
@@ -140,7 +155,23 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 				THEN NOW() ELSE updated_at END
 		WHERE id = $1
 		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, passwordHash, status).Scan(
+	`
+
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	return updateIn(r.pool, ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+// UpdateTx — транзакционная версия Update (Unit of Work): выполняет UPDATE
+// внутри транзакции из контекста (domain.TxFromContext). Если транзакции нет,
+// эквивалентен Update. Используется use-case вместе с RevokeAllForUser для
+// атомарной смены пароля с отзывом сессий.
+func (r *UserRepository) UpdateTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	return updateIn(r.querier(ctx), ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+func updateIn(rw dbQuerier, ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	var u domain.User
+	err := rw.QueryRow(ctx, updateSQL, id, email, firstName, lastName, passwordHash, status).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -161,7 +192,18 @@ func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, email, firstN
 // роли (политика «админ не удаляет себя» относится только к админскому
 // маршруту DELETE /users/{id}).
 func (r *UserRepository) DeleteSelf(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return deleteSelfIn(r.pool, ctx, id)
+}
+
+// DeleteSelfTx — транзакционная версия DeleteSelf (Unit of Work): выполняется
+// внутри транзакции из контекста. Используется DeleteMe для атомарного
+// «отзыв сессий + удаление аккаунта».
+func (r *UserRepository) DeleteSelfTx(ctx context.Context, id uuid.UUID) error {
+	return deleteSelfIn(r.querier(ctx), ctx, id)
+}
+
+func deleteSelfIn(rw dbQuerier, ctx context.Context, id uuid.UUID) error {
+	tag, err := rw.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -171,9 +213,7 @@ func (r *UserRepository) DeleteSelf(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
-	var u domain.User
-	err := r.pool.QueryRow(ctx, `
+const replaceSQL = `
 		UPDATE users SET
 			email = $2,
 			first_name = $3,
@@ -183,7 +223,23 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 			updated_at = NOW()
 		WHERE id = $1
 		RETURNING id, email, password_hash, role, status, first_name, last_name, created_at, updated_at
-	`, id, email, firstName, lastName, passwordHash, status).Scan(
+	`
+
+func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	return replaceIn(r.pool, ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+// ReplaceTx — транзакционная версия Replace (Unit of Work). PUT /users/{id}
+// всегда содержит новый пароль, поэтому замена карточки выполняется вместе
+// с отзывом всех refresh-токенов в одной транзакции: при сбое любой из
+// операций откатывается обе.
+func (r *UserRepository) ReplaceTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	return replaceIn(r.querier(ctx), ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+func replaceIn(rw dbQuerier, ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	var u domain.User
+	err := rw.QueryRow(ctx, replaceSQL, id, email, firstName, lastName, passwordHash, status).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Status, &u.FirstName, &u.LastName, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -199,7 +255,18 @@ func (r *UserRepository) Replace(ctx context.Context, id uuid.UUID, email, first
 }
 
 func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1 AND role <> $2`, id, domain.RoleAdmin)
+	return deleteIn(r.pool, ctx, id)
+}
+
+// DeleteTx — транзакционная версия Delete (Unit of Work): выполняется внутри
+// транзакции из контекста. Используется админским удалением для атомарного
+// «отзыв сессий + удаление аккаунта».
+func (r *UserRepository) DeleteTx(ctx context.Context, id uuid.UUID) error {
+	return deleteIn(r.querier(ctx), ctx, id)
+}
+
+func deleteIn(rw dbQuerier, ctx context.Context, id uuid.UUID) error {
+	tag, err := rw.Exec(ctx, `DELETE FROM users WHERE id = $1 AND role <> $2`, id, domain.RoleAdmin)
 	if err != nil {
 		return err
 	}
@@ -208,7 +275,7 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 
 	var role string
-	err = r.pool.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, id).Scan(&role)
+	err = rw.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, id).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	}

@@ -213,6 +213,25 @@ func (s *mockStore) DeleteSelf(ctx context.Context, id uuid.UUID) error {
 
 // ------------------------- интерфейс TokenStore -------------------------
 
+// Транзакционные варианты (Unit of Work): in-memory мок не имеет настоящего
+// rollback, поэтому Tx-методы делегируют нетранзакционным аналогам.
+
+func (s *mockStore) UpdateTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status *string) (*domain.User, error) {
+	return s.Update(ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+func (s *mockStore) ReplaceTx(ctx context.Context, id uuid.UUID, email, firstName, lastName, passwordHash, status string) (*domain.User, error) {
+	return s.Replace(ctx, id, email, firstName, lastName, passwordHash, status)
+}
+
+func (s *mockStore) DeleteTx(ctx context.Context, id uuid.UUID) error {
+	return s.Delete(ctx, id)
+}
+
+func (s *mockStore) DeleteSelfTx(ctx context.Context, id uuid.UUID) error {
+	return s.DeleteSelf(ctx, id)
+}
+
 func (s *mockStore) Store(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

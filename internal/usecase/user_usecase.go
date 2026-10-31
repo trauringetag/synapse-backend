@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"log"
 
 	"github.com/google/uuid"
 
@@ -20,12 +19,16 @@ type UserUseCaseImpl struct {
 	// Порты репозиториев — из домена (единственный источник правды: domain/ports.go).
 	users  domain.UserRepository
 	tokens domain.RefreshTokenRepository
+	// uow — транзакционный порт (Unit of Work): смена пароля и отзыв сессий
+	// выполняются в одной транзакции (Задача 2). Может быть nil (лёгкие
+	// сборки/тесты) — тогда операции выполняются без явной транзакции.
+	uow    domain.UnitOfWork
 	hasher PasswordHasher // порт хеширования паролей (реализация — в инфраструктуре)
 }
 
 // NewUserUseCase собирает сценарии работы с пользователями через DI.
-func NewUserUseCase(users domain.UserRepository, tokens domain.RefreshTokenRepository, hasher PasswordHasher) *UserUseCaseImpl {
-	return &UserUseCaseImpl{users: users, tokens: tokens, hasher: hasher}
+func NewUserUseCase(users domain.UserRepository, tokens domain.RefreshTokenRepository, uow domain.UnitOfWork, hasher PasswordHasher) *UserUseCaseImpl {
+	return &UserUseCaseImpl{users: users, tokens: tokens, uow: uow, hasher: hasher}
 }
 
 var _ UserUseCase = (*UserUseCaseImpl)(nil)
@@ -196,21 +199,53 @@ func (uc *UserUseCaseImpl) UpdateOwnProfile(ctx context.Context, in UpdateOwnPro
 
 // ---------- Админские замена/обновление ----------
 
-// deactivateSessions — единая политика деактивации (soft delete): любое
-// переведение аккаунта в статус inactive обязано сопровождаться немедленным
-// отзывом всех refresh-токенов пользователя, чтобы заблокированный/удаленный
-// аккаунт не сохранил живые сессии. Сбой отзыва не откатывает уже выполненное
-// обновление статуса (запись уже inactive — вход и ротация токенов для неё
-// всё равно запрещены на уровне БД/middleware), но обязательно логируется
-// для аудита и ручного вмешательства.
-func (uc *UserUseCaseImpl) deactivateSessions(ctx context.Context, userID uuid.UUID) {
-	if err := uc.tokens.RevokeAllForUser(ctx, userID); err != nil {
-		log.Printf("event=revoke_all_sessions_failed user_id=%s error=%v", userID.String(), err)
+// requiresSessionRevocation — единое бизнес-правило (Задача 2): изменение
+// пароля (PUT всегда несёт новый пароль; PATCH — если password передан) или
+// перевод аккаунта в inactive обязывают отозвать ВСЕ refresh-токены
+// пользователя. Отзыв выполняется в одной транзакции с изменением карточки
+// (см. runAtomic), поэтому украденный старый refresh-токен гарантированно
+// перестаёт работать сразу после админского сброса пароля.
+func requiresSessionRevocation(passwordHash *string, status *string) bool {
+	if passwordHash != nil {
+		return true
+	}
+	return status != nil && *status == domain.StatusInactive
+}
+
+// runAtomic выполняет fn внутри транзакции UnitOfWork. Если UoW не настроен
+// (nil — например, в лёгких тестовых сборках), операция выполняется без
+// транзакции: семантика вызова репозиториев при этом не меняется.
+func (uc *UserUseCaseImpl) runAtomic(ctx context.Context, fn func(context.Context) error) error {
+	if uc.uow == nil {
+		return fn(ctx)
+	}
+	return uc.uow.Run(ctx, fn)
+}
+
+// mapRepoErrTranslate — отображение доменной ошибки репозитория на ошибку
+// use-case с заданным внутренним кодом/сообщением (для вызовов внутри fn).
+func mapReplaceErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, domain.ErrNotFound):
+		return wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
+	case errors.Is(err, domain.ErrConflict):
+		return wrapErr(ErrCodeConflict, messages.EmailAlreadyUsed, err)
+	default:
+		return wrapErr(ErrCodeInternal, messages.FailedToUpdateUser, err)
 	}
 }
 
 // AdminReplace полностью заменяет карточку пользователя (PUT /users/{id}).
 // Поле role намеренно не принимается: роль через PUT не меняется.
+//
+// Атомарность (Задача 2): PUT всегда содержит новый пароль, поэтому замена
+// карточки и отзыв всех refresh-токенов выполняются в ОДНОЙ транзакции
+// (UnitOfWork.Run): ReplaceTx + RevokeAllForUser. Если любая из операций
+// падает, транзакция откатывается целиком — смена пароля без отзыва сессий
+// не фиксируется, и злоумышленник с украденным refresh-токеном не сохраняет
+// доступ после админского сброса пароля.
 func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUserInput) (*domain.User, error) {
 	email := normalizeEmail(in.Email)
 	first := normalizeName(in.FirstName)
@@ -241,22 +276,35 @@ func (uc *UserUseCaseImpl) AdminReplace(ctx context.Context, in AdminReplaceUser
 	if err != nil {
 		return nil, wrapErr(ErrCodeInternal, messages.FailedToHashPassword, err)
 	}
-	user, err := uc.users.Replace(ctx, in.ID, email, first, last, hash, status)
-	switch {
-	case errors.Is(err, domain.ErrNotFound):
-		return nil, wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
-	case errors.Is(err, domain.ErrConflict):
-		return nil, wrapErr(ErrCodeConflict, messages.EmailAlreadyUsed, err)
-	case err != nil:
-		return nil, wrapErr(ErrCodeInternal, messages.FailedToUpdateUser, err)
+
+	var user *domain.User
+	if txErr := uc.runAtomic(ctx, func(txCtx context.Context) error {
+		var err error
+		user, err = uc.users.ReplaceTx(txCtx, in.ID, email, first, last, hash, status)
+		if err != nil {
+			return mapReplaceErr(err)
+		}
+		// Смена пароля => обязательный отзыв всех сессий в той же транзакции.
+		// Ошибка отзыва прерывает fn -> ROLLBACK: пароль НЕ изменён.
+		if err := uc.tokens.RevokeAllForUser(txCtx, in.ID); err != nil {
+			return wrapErr(ErrCodeInternal, messages.FailedToRevokeSessions, err)
+		}
+		return nil
+	}); txErr != nil {
+		return nil, txErr
 	}
 	return user, nil
 }
 
 // AdminUpdate частично обновляет карточку пользователя админом (PATCH /users/{id}).
-// При смене пароля хеш пересоздается, а все активные сессии пользователя
-// отзываются (требование безопасности). Перевод статуса в inactive тоже
-// отзывает все сессии — единая политика деактивации (см. deactivateSessions).
+//
+// Атомарность (Задача 2): если обновление затрагивает пароль или переводит
+// аккаунт в inactive, изменение карточки (UpdateTx) и отзыв всех
+// refresh-токенов (RevokeAllForUser) выполняются в ОДНОЙ транзакции
+// UnitOfWork. Ошибка любой из операций откатывает обе: сессии не могут
+// остаться живыми после смены пароля, а сбой отзыва — сделать смену пароля
+// «успешной». Обычные обновления (email/имена/реактивация) не требуют
+// отзыва и по-прежнему выполняются одним запросом без транзакции.
 func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserInput) (*domain.User, error) {
 	var email, first, last, passwordHash, status *string
 
@@ -299,21 +347,35 @@ func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserIn
 		passwordHash = &h
 	}
 
-	user, err := uc.users.Update(ctx, in.ID, email, first, last, passwordHash, status)
-	switch {
-	case errors.Is(err, domain.ErrNotFound):
-		return nil, wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
-	case errors.Is(err, domain.ErrConflict):
-		return nil, wrapErr(ErrCodeConflict, messages.EmailAlreadyUsed, err)
-	case err != nil:
-		return nil, wrapErr(ErrCodeInternal, messages.FailedToUpdateUser, err)
+	// Обновления, не требующие отзыва сессий, выполняются без транзакции.
+	if !requiresSessionRevocation(passwordHash, status) {
+		user, err := uc.users.Update(ctx, in.ID, email, first, last, passwordHash, status)
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			return nil, wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
+		case errors.Is(err, domain.ErrConflict):
+			return nil, wrapErr(ErrCodeConflict, messages.EmailAlreadyUsed, err)
+		case err != nil:
+			return nil, wrapErr(ErrCodeInternal, messages.FailedToUpdateUser, err)
+		}
+		return user, nil
 	}
-	// Единая политика инвалидации сессий (Задача 2): смена пароля и перевод
-	// статуса в inactive (деактивация) обязывают отозвать все refresh-токены
-	// пользователя. Ошибка отзыва логируется, но не откатывает уже выполненное
-	// обновление (см. deactivateSessions).
-	if passwordHash != nil || (status != nil && *status == domain.StatusInactive) {
-		uc.deactivateSessions(ctx, in.ID)
+
+	var user *domain.User
+	if txErr := uc.runAtomic(ctx, func(txCtx context.Context) error {
+		var err error
+		user, err = uc.users.UpdateTx(txCtx, in.ID, email, first, last, passwordHash, status)
+		if err != nil {
+			return mapReplaceErr(err)
+		}
+		// Смена пароля / деактивация => отзыв всех сессий в той же транзакции.
+		// Ошибка отзыва прерывает fn -> ROLLBACK: обновление НЕ закоммичено.
+		if err := uc.tokens.RevokeAllForUser(txCtx, in.ID); err != nil {
+			return wrapErr(ErrCodeInternal, messages.FailedToRevokeSessions, err)
+		}
+		return nil
+	}); txErr != nil {
+		return nil, txErr
 	}
 	return user, nil
 }
@@ -327,12 +389,12 @@ func (uc *UserUseCaseImpl) AdminUpdate(ctx context.Context, in AdminUpdateUserIn
 //  1. Получить пользователя по userID; если не найден — ErrCodeNotFound.
 //  2. Если аккаунт уже inactive — конфликт (повторное/некорректное
 //     самоудаление деактивированного аккаунта запрещено).
-//  3. Немедленно отозвать все refresh-токены (RevokeAllForUser), чтобы старые
-//     сессии нельзя было использовать после удаления. Стратегия частичного
-//     сбоя: ошибка отзыва логируется, но операция продолжается — запись всё
-//     равно удаляется (после hard delete вход для несуществующего пользователя
-//     невозможен в принципе, поэтому живых сессий остаться не может).
-//  4. Физически удалить запись через UserRepository.Delete (DELETE FROM users).
+//  3. В ОДНОЙ транзакции UnitOfWork (Задача 2): отозвать все refresh-токены
+//     (RevokeAllForUser) и физически удалить запись (DeleteTx; для роли admin
+//     — DeleteSelfTx, т.к. DeleteTx защищён от удаления админов). Ошибка любой
+//     из операций откатывает обе: либо аккаунт удалён И сессии отозваны, либо
+//     не произошло ничего. Это устраняет окно, в котором при частичном сбое
+//     удалялся аккаунт, но отзыв падал (или наоборот).
 func (uc *UserUseCaseImpl) DeleteMe(ctx context.Context, userID uuid.UUID) error {
 	user, err := uc.users.GetByID(ctx, userID)
 	switch {
@@ -346,64 +408,66 @@ func (uc *UserUseCaseImpl) DeleteMe(ctx context.Context, userID uuid.UUID) error
 		return newErr(ErrCodeConflict, messages.AccountAlreadyInactive)
 	}
 
-	// Шаг 1 — отзыв сессий. При сбое логируем и продолжаем (см. докстроку).
-	if revokeErr := uc.tokens.RevokeAllForUser(ctx, userID); revokeErr != nil {
-		log.Printf("event=revoke_all_sessions_failed user_id=%s op=delete_me error=%v", userID.String(), revokeErr)
-	}
+	return uc.runAtomic(ctx, func(txCtx context.Context) error {
+		// Шаг 1 — отзыв сессий внутри транзакции. Ошибка прерывает fn ->
+		// ROLLBACK: аккаунт остаётся в БД, операция повторяема.
+		if revokeErr := uc.tokens.RevokeAllForUser(txCtx, userID); revokeErr != nil {
+			return wrapErr(ErrCodeInternal, messages.FailedToRevokeSessions, revokeErr)
+		}
 
-	// Шаг 2 — физическое (hard) удаление записи пользователя.
-	// Delete защищает аккаунты роли admin (domain.ErrProtected) — эта защита
-	// относится к админскому маршруту DELETE /users/{id}. Самоудаление всегда
-	// выполняется над собственным аккаунтом, поэтому при таком отказе удаляется
-	// через DeleteSelf (DELETE FROM users без условия по роли).
-	if delErr := uc.users.Delete(ctx, userID); delErr != nil {
+		// Шаг 2 — физическое (hard) удаление записи пользователя.
+		// DeleteTx защищает аккаунты роли admin (domain.ErrProtected) — эта
+		// защита относится к админскому маршруту DELETE /users/{id}.
+		// Самоудаление всегда выполняется над собственным аккаунтом, поэтому
+		// при таком отказе удаляется через DeleteSelfTx (DELETE FROM users без
+		// условия по роли).
+		delErr := uc.users.DeleteTx(txCtx, userID)
+		if delErr != nil && errors.Is(delErr, domain.ErrProtected) {
+			delErr = uc.users.DeleteSelfTx(txCtx, userID)
+		}
 		switch {
+		case delErr == nil:
+			return nil
 		case errors.Is(delErr, domain.ErrNotFound):
 			return wrapErr(ErrCodeNotFound, messages.UserNotFound, delErr)
-		case errors.Is(delErr, domain.ErrProtected):
-			if retryErr := uc.users.DeleteSelf(ctx, userID); retryErr != nil {
-				if errors.Is(retryErr, domain.ErrNotFound) {
-					return wrapErr(ErrCodeNotFound, messages.UserNotFound, retryErr)
-				}
-				return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, retryErr)
-			}
 		default:
 			return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, delErr)
 		}
-	}
-	return nil
+	})
 }
 
 // Delete выполняет физическое (hard) удаление пользователя админом
 // (DELETE /users/{id}). Политики (Задача 2):
 //   - необратимо: запись стирается из БД; для сохранения данных используется
 //     обратимая деактивация (PATCH /users/{id} со status=inactive), которая
-//     также отзывает сессии (см. deactivateSessions);
+//     также отзывает сессии в той же транзакции (см. AdminUpdate);
 //   - доступно только админскому сценарию (RBAC на уровне маршрута) и
 //     защищено от самоудаления (ErrForbidden, см. AdminCannotDeleteSelf —
 //     пользователь удаляет себя через DELETE /users/me, см. DeleteMe);
-//   - перед удалением обязательно отзываются все refresh-токены цели, чтобы
-//     не осталось «висячих» сессий. Стратегия частичного сбоя: если отзыв
-//     сессий завершился ошибкой, физическое удаление НЕ выполняется (возвращается
-//     внутренняя ошибка) — удаление без отзыва оставило бы живые токены, а
-//     откатывать здесь нечего, поэтому безопаснее прервать операцию.
+//   - отзыв всех refresh-токенов цели и физическое удаление выполняются в
+//     ОДНОЙ транзакции UnitOfWork (RevokeAllForUser + DeleteTx), чтобы не
+//     осталось «висячих» сессий и не было частичных состояний: ошибка любой
+//     из операций откатывает обе.
 func (uc *UserUseCaseImpl) Delete(ctx context.Context, in DeleteUserInput) error {
 	if in.TargetID == in.PrincipalID {
 		return newErr(ErrCodeForbidden, messages.AdminCannotDeleteSelf)
 	}
-	// Отзываем сессии ДО физического удаления (гарантия отсутствия висячих токенов).
-	if revokeErr := uc.tokens.RevokeAllForUser(ctx, in.TargetID); revokeErr != nil {
-		log.Printf("event=revoke_all_sessions_failed user_id=%s op=admin_delete error=%v", in.TargetID.String(), revokeErr)
-		return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, revokeErr)
-	}
-	err := uc.users.Delete(ctx, in.TargetID)
-	switch {
-	case errors.Is(err, domain.ErrNotFound):
-		return wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
-	case errors.Is(err, domain.ErrProtected):
-		return wrapErr(ErrCodeForbidden, messages.CannotDeleteAdminAccount, err)
-	case err != nil:
-		return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, err)
-	}
-	return nil
+	return uc.runAtomic(ctx, func(txCtx context.Context) error {
+		// Отзываем сессии ДО физического удаления (гарантия отсутствия
+		// висячих токенов); при сбое отзыва транзакция откатывается целиком.
+		if revokeErr := uc.tokens.RevokeAllForUser(txCtx, in.TargetID); revokeErr != nil {
+			return wrapErr(ErrCodeInternal, messages.FailedToRevokeSessions, revokeErr)
+		}
+		err := uc.users.DeleteTx(txCtx, in.TargetID)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, domain.ErrNotFound):
+			return wrapErr(ErrCodeNotFound, messages.UserNotFound, err)
+		case errors.Is(err, domain.ErrProtected):
+			return wrapErr(ErrCodeForbidden, messages.CannotDeleteAdminAccount, err)
+		default:
+			return wrapErr(ErrCodeInternal, messages.FailedToDeleteUser, err)
+		}
+	})
 }
