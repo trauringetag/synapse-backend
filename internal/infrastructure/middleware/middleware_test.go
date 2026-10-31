@@ -416,12 +416,35 @@ func TestCSRFMiddleware(t *testing.T) {
 		handler := CSRF(cfg)(next)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/login", nil)
 		req.Header.Set("Origin", "http://localhost:3000")
+		// Браузерный (cookie-based) контекст: без csrf_token в cookie запрос
+		// обязан получить 403. Нативный мобильный login идёт вообще без
+		// cookie — он неуязвим к CSRF (покрыто platform_test.go).
+		req.AddCookie(&http.Cookie{Name: "other", Value: "x"})
 
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("При отсутствии CSRF статус = %d, должен быть: 403", rec.Code)
+		}
+	})
+
+	t.Run("Анонимный мобильный POST без cookie проходит без CSRF", func(t *testing.T) {
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+		handler := CSRF(cfg)(next)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/login", nil)
+		req.Header.Set("X-Client-Platform", "mobile") // Origin/cookie нет
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent || !nextCalled {
+			t.Errorf("Запрос без cookie не должен требовать CSRF: статус = %d, next = %v", rec.Code, nextCalled)
 		}
 	})
 

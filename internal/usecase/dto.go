@@ -127,11 +127,17 @@ type SessionResult struct {
 // ---------- Интерфейсы сценариев использования ----------
 
 // AuthUseCase — бизнес-сценарии модуля аутентификации: регистрация (обычная и
-// админская со строгим сравнением токена), вход с защитой от timing-атак,
+// админская со строгим сравнением токена; опционально — с выпуском стартовой
+// JWT-сессии для мобильных клиентов), вход с защитой от timing-атак,
 // ротация refresh-токенов с детектом replay, выход и выдача CSRF-токена.
 type AuthUseCase interface {
-	Register(ctx context.Context, in RegisterInput) (*domain.User, error)
-	RegisterAdmin(ctx context.Context, in RegisterInput) (*domain.User, error)
+	// Register регистрирует обычного пользователя. Если withSession == true,
+	// сразу выпускает пару токенов (пользователь входит после регистрации):
+	// Pair заполнен, иначе nil. Формат транспорта (cookie vs JSON) — задача
+	// delivery-слоя, use-case этого не знает.
+	Register(ctx context.Context, in RegisterInput, withSession bool) (*SessionResult, error)
+	// RegisterAdmin — то же для роли admin (проверка X-Admin-Token внутри).
+	RegisterAdmin(ctx context.Context, in RegisterInput, withSession bool) (*SessionResult, error)
 	Login(ctx context.Context, in LoginInput) (*SessionResult, error)
 	// Refresh возвращает результат ротации refresh-токена:
 	//   - Pair != nil               -> успех: установить новые cookie;

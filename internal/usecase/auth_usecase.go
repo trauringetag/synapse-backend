@@ -146,28 +146,48 @@ func (uc *AuthUseCaseImpl) createUserWithHash(ctx context.Context, email, passwo
 	return user, nil
 }
 
-// Register регистрирует обычного пользователя (роль user).
-func (uc *AuthUseCaseImpl) Register(ctx context.Context, in RegisterInput) (*domain.User, error) {
+// register — общая часть обычной и админской регистрации: валидация, создание
+// пользователя и опциональный выпуск стартовой JWT-сессии (withSession —
+// мобильные/серверные клиенты входят сразу после регистрации). Веб-клиенты
+// используют withSession == false: сессия выпускается только на /login.
+func (uc *AuthUseCaseImpl) register(ctx context.Context, in RegisterInput, admin bool, withSession bool) (*SessionResult, error) {
 	email, first, last, err := validateRegister(in)
 	if err != nil {
 		return nil, err
 	}
-	return uc.createUserWithHash(ctx, email, in.Password, domain.RoleUser, first, last)
+	role := domain.RoleUser
+	if admin {
+		role = domain.RoleAdmin
+		// Проверка админ-токена выполняется ПОСЛЕ валидации полей (как раньше).
+		provided := normalizeToken(in.AdminToken)
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(uc.adminToken)) != 1 {
+			return nil, newErr(ErrCodeForbidden, messages.InvalidAdminToken)
+		}
+	}
+	user, err := uc.createUserWithHash(ctx, email, in.Password, role, first, last)
+	if err != nil {
+		return nil, err
+	}
+	res := &SessionResult{User: user}
+	if withSession {
+		pair, err := uc.issueSession(ctx, user)
+		if err != nil {
+			return nil, wrapErr(ErrCodeInternal, messages.FailedToIssueTokens, err)
+		}
+		res.Pair = pair
+	}
+	return res, nil
+}
+
+// Register регистрирует обычного пользователя (роль user).
+func (uc *AuthUseCaseImpl) Register(ctx context.Context, in RegisterInput, withSession bool) (*SessionResult, error) {
+	return uc.register(ctx, in, false, withSession)
 }
 
 // RegisterAdmin регистрирует администратора; дополнительно constant-time
 // сравнением проверяется секретный токен админской регистрации.
-func (uc *AuthUseCaseImpl) RegisterAdmin(ctx context.Context, in RegisterInput) (*domain.User, error) {
-	email, first, last, err := validateRegister(in)
-	if err != nil {
-		return nil, err
-	}
-	// Проверка админ-токена выполняется ПОСЛЕ валидации полей (как раньше).
-	provided := normalizeToken(in.AdminToken)
-	if subtle.ConstantTimeCompare([]byte(provided), []byte(uc.adminToken)) != 1 {
-		return nil, newErr(ErrCodeForbidden, messages.InvalidAdminToken)
-	}
-	return uc.createUserWithHash(ctx, email, in.Password, domain.RoleAdmin, first, last)
+func (uc *AuthUseCaseImpl) RegisterAdmin(ctx context.Context, in RegisterInput, withSession bool) (*SessionResult, error) {
+	return uc.register(ctx, in, true, withSession)
 }
 
 // ---------- Вход ----------

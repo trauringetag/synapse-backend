@@ -114,10 +114,18 @@ func TestRegister_Success(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
-	var u domain.User
-	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+	// Веб-формат (без X-Client-Platform): сообщение + профиль, токенов в теле нет.
+	var resp struct {
+		Message string      `json:"message"`
+		User    domain.User `json:"user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
+	if resp.Message != messages.RegistrationSuccessful {
+		t.Errorf("Message = %q, ожидается: %q", resp.Message, messages.RegistrationSuccessful)
+	}
+	u := resp.User
 	if u.Email != "newuser@example.com" {
 		t.Errorf("Email не нормализован: %q", u.Email)
 	}
@@ -252,10 +260,13 @@ func TestRegisterAdmin_Success(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Статус = %d, ожидается: 201; body = %s", rec.Code, rec.Body.String())
 	}
-	var u domain.User
-	_ = json.Unmarshal(rec.Body.Bytes(), &u)
-	if u.Role != domain.RoleAdmin {
-		t.Errorf("Роль = %q, ожидается: %q", u.Role, domain.RoleAdmin)
+	var resp struct {
+		Message string      `json:"message"`
+		User    domain.User `json:"user"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.User.Role != domain.RoleAdmin {
+		t.Errorf("Роль = %q, ожидается: %q", resp.User.Role, domain.RoleAdmin)
 	}
 }
 
@@ -849,6 +860,9 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 	t.Run("POST без CSRF-токена", func(t *testing.T) {
 		req := postJSON("/api/v1/register", validRegBody())
 		req.Header.Set("Origin", "https://app.example")
+		// Имитация браузера жертвы: csrf_token cookie отправляется автоматически,
+		// но X-CSRF-Token (читается JS с evil.com невозможно) отсутствует.
+		req.AddCookie(&http.Cookie{Name: "csrf_token", Value: "some.csrf.value"})
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
@@ -868,11 +882,14 @@ func TestCSRFMiddlewareBlocksStateChangingRequests(t *testing.T) {
 		}
 	})
 
-	t.Run("POST с токеном только в header (без Cookie)", func(t *testing.T) {
+	t.Run("POST с токеном только в header (cookie не совпадает)", func(t *testing.T) {
 		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
 		req := postJSON("/api/v1/register", validRegBody())
 		req.Header.Set("Origin", "https://app.example")
-		req.Header.Set("X-CSRF-Token", token) // cookie не приложена
+		// Браузер всегда прикладывает csrf_token cookie; подставим значение,
+		// не совпадающее с заголовком — double-submit должен дать 403.
+		req.AddCookie(&http.Cookie{Name: "csrf_token", Value: "stale.or.other.value"})
+		req.Header.Set("X-CSRF-Token", token)
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {

@@ -84,10 +84,11 @@ func requireUseCaseErr(t *testing.T, err error, code ErrorCode) *UseCaseError {
 func TestAuthUseCase_Register_Success(t *testing.T) {
 	f := newAuthFixture()
 
-	user, err := f.uc.Register(context.Background(), newValidRegisterInput())
+	res, err := f.uc.Register(context.Background(), newValidRegisterInput(), false)
 
 	require.NoError(t, err)
-	require.NotNil(t, user)
+	user := res.User
+	require.NotNil(t, res.User)
 	// Email нормализуется (lowercase) — бизнес-правило слоя use-case.
 	assert.Equal(t, "test.user@example.com", user.Email)
 	assert.Equal(t, domain.RoleUser, user.Role, "обычная регистрация всегда выдаёт роль user")
@@ -151,9 +152,9 @@ func TestAuthUseCase_Register_ValidationError(t *testing.T) {
 			in := newValidRegisterInput()
 			tt.mutate(&in)
 
-			user, err := f.uc.Register(context.Background(), in)
+			res, err := f.uc.Register(context.Background(), in, false)
 
-			assert.Nil(t, user)
+			assert.Nil(t, res)
 			ue := requireUseCaseErr(t, err, ErrCodeValidation)
 			assert.Equal(t, messages.CheckRequiredFields, ue.Message)
 			for _, field := range tt.wantDetails {
@@ -171,9 +172,9 @@ func TestAuthUseCase_Register_DuplicateEmail(t *testing.T) {
 		return nil, domain.ErrConflict
 	}
 
-	user, err := f.uc.Register(context.Background(), newValidRegisterInput())
+	res, err := f.uc.Register(context.Background(), newValidRegisterInput(), false)
 
-	assert.Nil(t, user)
+	assert.Nil(t, res)
 	ue := requireUseCaseErr(t, err, ErrCodeConflict)
 	assert.Equal(t, messages.EmailAlreadyUsed, ue.Message)
 	// Оригинальная доменная ошибка сохраняется в цепочке (errors.Is работает).
@@ -187,9 +188,9 @@ func TestAuthUseCase_Register_RepositoryFailure(t *testing.T) {
 		return nil, repoErr
 	}
 
-	user, err := f.uc.Register(context.Background(), newValidRegisterInput())
+	res, err := f.uc.Register(context.Background(), newValidRegisterInput(), false)
 
-	assert.Nil(t, user)
+	assert.Nil(t, res)
 	ue := requireUseCaseErr(t, err, ErrCodeInternal)
 	assert.Equal(t, messages.FailedToCreateUser, ue.Message)
 	assert.ErrorIs(t, err, repoErr)
@@ -200,9 +201,9 @@ func TestAuthUseCase_Register_HashFailure(t *testing.T) {
 	hashErr := errors.New("bcrypt: salt too short")
 	f.hasher.HashFunc = func(string) (string, error) { return "", hashErr }
 
-	user, err := f.uc.Register(context.Background(), newValidRegisterInput())
+	res, err := f.uc.Register(context.Background(), newValidRegisterInput(), false)
 
-	assert.Nil(t, user)
+	assert.Nil(t, res)
 	ue := requireUseCaseErr(t, err, ErrCodeInternal)
 	assert.Equal(t, messages.FailedToHashPassword, ue.Message)
 	assert.ErrorIs(t, err, hashErr)
@@ -216,11 +217,11 @@ func TestAuthUseCase_RegisterAdmin_Success(t *testing.T) {
 	in := newValidRegisterInput()
 	in.AdminToken = testAdminToken
 
-	user, err := f.uc.RegisterAdmin(context.Background(), in)
+	res, err := f.uc.RegisterAdmin(context.Background(), in, false)
 
 	require.NoError(t, err)
-	require.NotNil(t, user)
-	assert.Equal(t, domain.RoleAdmin, user.Role, "админская регистрация выдаёт роль admin")
+	require.NotNil(t, res.User)
+	assert.Equal(t, domain.RoleAdmin, res.User.Role, "админская регистрация выдаёт роль admin")
 }
 
 func TestAuthUseCase_RegisterAdmin_InvalidToken(t *testing.T) {
@@ -239,19 +240,19 @@ func TestAuthUseCase_RegisterAdmin_InvalidToken(t *testing.T) {
 				f := newAuthFixture()
 				in := newValidRegisterInput()
 				in.AdminToken = tt.token
-				user, err := f.uc.RegisterAdmin(context.Background(), in)
+				res, err := f.uc.RegisterAdmin(context.Background(), in, false)
 				require.NoError(t, err)
-				require.NotNil(t, user)
-				assert.Equal(t, domain.RoleAdmin, user.Role)
+				require.NotNil(t, res.User)
+				assert.Equal(t, domain.RoleAdmin, res.User.Role)
 				return
 			}
 			f := newAuthFixture()
 			in := newValidRegisterInput()
 			in.AdminToken = tt.token
 
-			user, err := f.uc.RegisterAdmin(context.Background(), in)
+			res, err := f.uc.RegisterAdmin(context.Background(), in, false)
 
-			assert.Nil(t, user)
+			assert.Nil(t, res)
 			ue := requireUseCaseErr(t, err, ErrCodeForbidden)
 			assert.Equal(t, messages.InvalidAdminToken, ue.Message)
 			assert.Zero(t, f.users.CountCalls("Create"), "пользователь не создаётся при неверном админ-токене")
@@ -267,14 +268,14 @@ func TestAuthUseCase_RegisterAdmin_EmptyConfiguredToken_AlwaysRejectsProvidedNon
 
 	in := newValidRegisterInput()
 	in.AdminToken = "anything"
-	_, err := f.uc.RegisterAdmin(context.Background(), in)
+	_, err := f.uc.RegisterAdmin(context.Background(), in, false)
 	requireUseCaseErr(t, err, ErrCodeForbidden)
 
 	// Пустой токен против пустого конфига — одинаковые строки, сравнение проходит.
 	in.AdminToken = ""
-	user, err := f.uc.RegisterAdmin(context.Background(), in)
+	res, err := f.uc.RegisterAdmin(context.Background(), in, false)
 	require.NoError(t, err)
-	assert.Equal(t, domain.RoleAdmin, user.Role)
+	assert.Equal(t, domain.RoleAdmin, res.User.Role)
 }
 
 func TestAuthUseCase_RegisterAdmin_ValidationErrorBeforeTokenCheck(t *testing.T) {
@@ -283,7 +284,7 @@ func TestAuthUseCase_RegisterAdmin_ValidationErrorBeforeTokenCheck(t *testing.T)
 	in.Password = "short"          // невалидное поле
 	in.AdminToken = testAdminToken // валидный токен
 
-	_, err := f.uc.RegisterAdmin(context.Background(), in)
+	_, err := f.uc.RegisterAdmin(context.Background(), in, false)
 
 	ue := requireUseCaseErr(t, err, ErrCodeValidation)
 	assert.NotEmpty(t, ue.Details["password"])

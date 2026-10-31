@@ -10,6 +10,7 @@ const (
 	TokensRefreshed         = "Токены обновлены"
 	LoggedOut               = "Вышли из системы"
 	AuthorizationSuccessful = "Авторизация успешна"
+	RegistrationSuccessful  = "Регистрация успешна"
 
 	InvalidOrigin      = "Недопустимый Origin"
 	InvalidCSRFToken   = "Недействительный CSRF-токен"

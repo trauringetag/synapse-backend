@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
+	"github.com/trauringetag/synapse-backend/internal/domain"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
@@ -29,6 +30,7 @@ func NewAuthHandler(cfg *config.Config, uc usecase.AuthUseCase) *AuthHandler {
 	return &AuthHandler{cfg: cfg, uc: uc}
 }
 
+// registerRequest — тело POST /register и POST /register-admin.
 type registerRequest struct {
 	Email     string `json:"email"`
 	Password  string `json:"password"`
@@ -45,23 +47,43 @@ type messageResponse struct {
 	Message string `json:"message"`
 }
 
+// registeredResponse — ответ веб-клиента: сообщение + профиль.
+// Токенов в теле нет (риск XSS): веб-клиент входит отдельно через /login.
+type registeredResponse struct {
+	Message string       `json:"message"`
+	User    *domain.User `json:"user"`
+}
+
+// respondRegister — общий вывод ответа регистрации для обоих форматов:
+//   - X-Client-Platform: mobile -> пользователь сразу входит, токены в
+//     JSON-теле (cookie НЕ ставятся);
+//   - web (включая отсутствие заголовка — обратная совместимость) -> только
+//     профиль пользователя, сессия выпускается на /login.
+func (h *AuthHandler) respondRegister(w http.ResponseWriter, r *http.Request, res *usecase.SessionResult, status int) {
+	if isMobilePlatform(r) && res.Pair != nil {
+		response.JSON(w, status, newTokenResponse(res.Pair, res.User))
+		return
+	}
+	response.JSON(w, status, registeredResponse{Message: messages.RegistrationSuccessful, User: res.User})
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := response.Decode(r, &req); err != nil {
 		response.DecodeError(w, err)
 		return
 	}
-	user, err := h.uc.Register(r.Context(), usecase.RegisterInput{
+	res, err := h.uc.Register(r.Context(), usecase.RegisterInput{
 		Email:     req.Email,
 		Password:  req.Password,
 		FirstName: req.FirstName,
 		LastName:  req.LastName,
-	})
+	}, isMobilePlatform(r))
 	if err != nil {
 		respondError(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, user)
+	h.respondRegister(w, r, res, http.StatusCreated)
 }
 
 func (h *AuthHandler) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
@@ -70,18 +92,18 @@ func (h *AuthHandler) RegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		response.DecodeError(w, err)
 		return
 	}
-	user, err := h.uc.RegisterAdmin(r.Context(), usecase.RegisterInput{
+	res, err := h.uc.RegisterAdmin(r.Context(), usecase.RegisterInput{
 		Email:      req.Email,
 		Password:   req.Password,
 		FirstName:  req.FirstName,
 		LastName:   req.LastName,
 		AdminToken: r.Header.Get("X-Admin-Token"),
-	})
+	}, isMobilePlatform(r))
 	if err != nil {
 		respondError(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, user)
+	h.respondRegister(w, r, res, http.StatusCreated)
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -95,18 +117,35 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		respondError(w, err)
 		return
 	}
+
+	// Формат ответа определяется X-Client-Platform (только формат, не безопасность).
+	if isMobilePlatform(r) {
+		// Мобильный / серверный клиент: токены в теле, cookie НЕ ставим.
+		response.JSON(w, http.StatusOK, newTokenResponse(res.Pair, res.User))
+		return
+	}
+
+	// Веб-клиент (включая отсутствие заголовка — обратная совместимость):
+	// HttpOnly cookie, токенов в теле НЕТ (риск XSS).
 	setTokenCookies(w, h.cfg, res.Pair)
-	response.JSON(w, http.StatusOK, map[string]any{
-		"message": messages.AuthorizationSuccessful,
-		"user":    res.User,
+	response.JSON(w, http.StatusOK, loginResponse{
+		Message: messages.AuthorizationSuccessful,
+		User:    res.User,
 	})
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	raw, _ := auth.ReadCookie(r, auth.RefreshCookie)
+	// Вход: cookie refresh_token (веб) ИЛИ Authorization: Bearer <refresh>
+	// (мобильные) ИЛИ {"refresh_token": "..."} в теле (альтернатива для
+	// мобильных). Приоритет источников фиксирован, смешивание исключено.
+	raw, _ := refreshCredential(r)
+	mobile := isMobilePlatform(r)
+
 	res, err := h.uc.Refresh(r.Context(), usecase.RefreshInput{RawRefreshToken: raw})
 	if err != nil {
-		if res != nil && res.ClearCookies {
+		// Внутренняя ошибка ротации: auth-cookie сбрасываются только
+		// веб-клиентам (мобильный клиент без cookie получает чистый JSON-ответ).
+		if res != nil && res.ClearCookies && !mobile {
 			auth.ClearTokenCookies(w, h.cfg)
 		}
 		respondError(w, err)
@@ -114,25 +153,46 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	if res.Pair == nil {
 		// Use-case классифицировал ротацию как отказ (просрочен/отозван/replay).
-		auth.ClearTokenCookies(w, h.cfg)
+		if !mobile {
+			auth.ClearTokenCookies(w, h.cfg)
+		}
 		response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
 		return
 	}
+
+	if mobile {
+		// Мобильный клиент: новые токены в JSON-теле, cookie НЕ ставятся.
+		// ВАЖНО: ротация атомарна, старый refresh отозван — клиент обязан
+		// перезаписать ОБА токена, иначе повторная отправка старого refresh
+		// приведёт к replay-детекту и отзыву всех сессий.
+		response.JSON(w, http.StatusOK, newTokenResponse(res.Pair, nil))
+		return
+	}
+
 	setTokenCookies(w, h.cfg, res.Pair)
 	response.JSON(w, http.StatusOK, messageResponse{Message: messages.TokensRefreshed})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	raw, cookieErr := auth.ReadCookie(r, auth.RefreshCookie)
+	// Для мобильных refresh-токен принимается из Bearer или JSON-тела
+	// ({"refresh_token": "..."}), поскольку cookie нет. Если токен отсутствует —
+	// logout всё равно возвращает 200, но сессия в БД не отзывается.
+	raw, hasToken := refreshCredential(r)
+	mobile := isMobilePlatform(r)
+
 	if err := h.uc.Logout(r.Context(), usecase.LogoutInput{
 		RawRefreshToken: raw,
-		HasCookie:       cookieErr == nil && raw != "",
+		HasCookie:       hasToken,
 	}); err != nil {
-		auth.ClearTokenCookies(w, h.cfg)
+		if !mobile {
+			auth.ClearTokenCookies(w, h.cfg)
+		}
 		respondError(w, err)
 		return
 	}
-	auth.ClearTokenCookies(w, h.cfg)
+	if !mobile {
+		auth.ClearTokenCookies(w, h.cfg)
+	}
 	response.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})
 }
 

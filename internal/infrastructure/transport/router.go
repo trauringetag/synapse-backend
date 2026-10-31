@@ -37,7 +37,7 @@ func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseC
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type", "X-Admin-Token", "X-Request-ID", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "X-Admin-Token", "X-Request-ID", "X-CSRF-Token", "Authorization", "X-Client-Platform"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))

@@ -64,7 +64,11 @@ func TestRequireAllowedOrigin(t *testing.T) {
 			})
 
 			handler := RequireAllowedOrigin(cfg)(next)
+			// Cookie-based (браузерный) контекст: проверка Origin обязательна.
+			// Анонимные запросы без cookie проходят без неё — покрыто
+			// TestRequireOrigin_AnonymousMobileWithoutOrigin_Passes ниже.
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+			req.AddCookie(&http.Cookie{Name: "session", Value: "jwt"})
 
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
@@ -137,6 +141,7 @@ func TestRequireAllowedOriginUsesRefererOnlyWhenOriginMissing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+			req.AddCookie(&http.Cookie{Name: "session", Value: "jwt"}) // браузерный контекст
 
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
@@ -152,6 +157,41 @@ func TestRequireAllowedOriginUsesRefererOnlyWhenOriginMissing(t *testing.T) {
 				t.Fatalf("Статус = %d, ожидается: %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestRequireOrigin_AnonymousMobileWithoutOrigin_Passes фиксирует архитектурное
+// правило: Origin требуется только запросам, использующим browser credential
+// (cookie). Нативный мобильный клиент cookie не хранит и Origin не отправляет;
+// подделать Origin из браузера нельзя, а без cookie CSRF-атака невозможна.
+func TestRequireOrigin_AnonymousMobileWithoutOrigin_Passes(t *testing.T) {
+	cfg := &config.Config{CORSOrigins: []string{"https://app.example.com"}}
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := RequireAllowedOrigin(cfg)(next)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/v1/login", nil)
+		req.Header.Set("X-Client-Platform", "mobile")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent || !nextCalled {
+			t.Errorf("%s без cookie и Origin: код = %d (ожидается 204), next = %v", method, rec.Code, nextCalled)
+		}
+	}
+
+	// Тот же запрос, но с cookie (подделанный mobile из браузера) — Origin
+	// обязателен: без него 403.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/login", nil)
+	req.Header.Set("X-Client-Platform", "mobile")
+	req.AddCookie(&http.Cookie{Name: "session", Value: "victim.jwt"})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Cookie-запрос без Origin: код = %d (ожидается 403)", rec.Code)
 	}
 }
 
@@ -314,8 +354,17 @@ func TestOriginSecurityAttackScenarios(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
+	// Атаки моделируются в браузерном (cookie-based) контексте: Origin
+	// проверяется, когда запрос несёт cookie. Запросы без cookie и без
+	// Bearer credential не используют (анонимные мобильные вызовы) —
+	// покрыто в platform_test.go.
+	withCookie := func(req *http.Request) *http.Request {
+		req.AddCookie(&http.Cookie{Name: "session", Value: "jwt"})
+		return req
+	}
+
 	t.Run("Атака: попытка обхода через манипуляцию Origin с пробелами", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+		req := withCookie(httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
 		req.Header.Set("Origin", " https://trusted.example.com ") // Пробелы по краям
 
 		rec := httptest.NewRecorder()
@@ -327,7 +376,7 @@ func TestOriginSecurityAttackScenarios(t *testing.T) {
 	})
 
 	t.Run("Атака: попытка внедрения через подделку subdomain", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+		req := withCookie(httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
 		req.Header.Set("Origin", "https://trusted.example.com.evil.com")
 
 		rec := httptest.NewRecorder()
@@ -339,7 +388,7 @@ func TestOriginSecurityAttackScenarios(t *testing.T) {
 	})
 
 	t.Run("Атака: попытка использования другого протокола", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+		req := withCookie(httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
 		req.Header.Set("Origin", "http://trusted.example.com") // HTTP вместо HTTPS
 
 		rec := httptest.NewRecorder()
@@ -351,7 +400,7 @@ func TestOriginSecurityAttackScenarios(t *testing.T) {
 	})
 
 	t.Run("Атака: попытка обхода через null byte", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil)
+		req := withCookie(httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
 		req.Header.Set("Origin", "https://trusted.example.com%00.evil.com")
 
 		rec := httptest.NewRecorder()

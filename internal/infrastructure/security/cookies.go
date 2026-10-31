@@ -17,6 +17,15 @@ func SetTokenCookies(w http.ResponseWriter, cfg *config.Config, pair *Pair) {
 	setCookie(w, cfg, RefreshCookie, pair.RefreshToken, pair.RefreshExp)
 }
 
+// SetAuthCookies — установочный cookie-хелпер для веб-клиентов (алиас
+// SetTokenCookies с именем, отражающим назначение: аутентификационная пара
+// access_token + refresh_token как HttpOnly cookie). Используется HTTP-слоем,
+// когда X-Client-Platform != "mobile". Для мобильных клиентов cookie НЕ
+// устанавливаются — токены возвращаются в JSON-теле.
+func SetAuthCookies(w http.ResponseWriter, cfg *config.Config, pair *Pair) {
+	SetTokenCookies(w, cfg, pair)
+}
+
 func ClearTokenCookies(w http.ResponseWriter, cfg *config.Config) {
 	expired := time.Unix(0, 0)
 	setCookie(w, cfg, AccessCookie, "", expired)
