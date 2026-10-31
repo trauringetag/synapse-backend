@@ -1,4 +1,7 @@
-FROM golang:1.23-alpine AS build
+# Go 1.26.x — закрытие symbol-level уязвимостей стандартной библиотеки
+# (net/http, crypto/tls), см. docs/SECURITY_DEPS.md. При необходимости
+# закрепите образ по digest: golang:1.26-alpine@sha256:...
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 
