@@ -24,7 +24,7 @@ import (
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
-	"github.com/trauringetag/synapse-backend/internal/infrastructure/security"
+	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 )
 
@@ -34,7 +34,7 @@ func nilCtx() context.Context { return context.Background() }
 // newUserHandler собирает хендлер пользователей на свежем моке.
 func newUserHandler() (*UserHandler, *mockStore) {
 	store := newMockStore()
-	return NewUserHandler(newUserUC(store)), store
+	return NewUserHandler(testConfig(), newUserUC(store)), store
 }
 
 // asPrincipal превращает пользователя в Principal из middleware.
@@ -970,6 +970,42 @@ func TestDeleteMe(t *testing.T) {
 		}
 	})
 
+	t.Run("Успех: 204 + браузер получает инструкции удалить auth-куки", func(t *testing.T) {
+		h, store := newUserHandler()
+		user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+		pair, _ := auth.IssuePair(cfg, user.ID, user.Email, user.Role)
+
+		token, _ := middleware.IssueCSRF(cfg.JWTSecret)
+		req := withCSRF(httptest.NewRequest(http.MethodDelete, "/api/v1/users/me", nil), token)
+		req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: pair.AccessToken})
+		req.AddCookie(&http.Cookie{Name: auth.RefreshCookie, Value: pair.RefreshToken})
+		rec := httptest.NewRecorder()
+		newChain(h, store).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("Статус = %d, ожидается: 204; body = %s", rec.Code, rec.Body.String())
+		}
+		// КРИТИЧНО: ответ обязан содержать Set-Cookie с Max-Age=-1 для
+		// access_token, refresh_token и csrf_token — иначе браузер сохранит
+		// авторизационные куки после удаления аккаунта.
+		wantCleared := map[string]bool{auth.AccessCookie: false, auth.RefreshCookie: false, "csrf_token": false}
+		for _, c := range rec.Result().Cookies() {
+			if _, ok := wantCleared[c.Name]; !ok {
+				continue
+			}
+			if c.MaxAge >= 0 || !c.Expires.IsZero() && c.Expires.After(time.Now()) {
+				t.Errorf("Cookie %s должна быть удалена (Max-Age=-1), получено MaxAge=%d Expires=%v",
+					c.Name, c.MaxAge, c.Expires)
+			}
+			wantCleared[c.Name] = true
+		}
+		for name, seen := range wantCleared {
+			if !seen {
+				t.Errorf("Ответ DELETE /users/me не содержит инструкцию на удаление cookie %q", name)
+			}
+		}
+	})
+
 	// Контекст запроса к DELETE /users/me несёт Principal, извлечённый из JWT,
 	// поэтому хендлер может вернуть 409 для уже неактивного аккаунта. Но через
 	// полный HTTP-стек до этого кейса дело не доходит: middleware.Authenticate
@@ -1042,6 +1078,7 @@ func TestDeleteMe(t *testing.T) {
 		}
 	})
 }
+
 // ---------------------------------------------------------------------------
 // RBAC: ВЕРТИКАЛЬНАЯ ЭСКАЛАЦИЯ И IDOR ЧЕРЕЗ ПОЛНУЮ ЦЕПОЧКУ MIDDLEWARE
 // ---------------------------------------------------------------------------
@@ -1052,7 +1089,7 @@ func TestDeleteMe(t *testing.T) {
 func TestRBAC_AdminEndpoints(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewUserHandler(newUserUC(store))
+	h := NewUserHandler(testConfig(), newUserUC(store))
 
 	user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 	admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
@@ -1096,7 +1133,7 @@ func TestRBAC_AdminEndpoints(t *testing.T) {
 func TestRBAC_IDOR(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
-	h := NewUserHandler(newUserUC(store))
+	h := NewUserHandler(testConfig(), newUserUC(store))
 
 	user := seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
 	victim := seedUser(t, store, "victim@example.com", "StrongPass123", domain.RoleUser)
@@ -1136,7 +1173,7 @@ func TestAdminFullFlow(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	authH := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	userH := NewUserHandler(newUserUC(store))
+	userH := NewUserHandler(testConfig(), newUserUC(store))
 	admin := seedUser(t, store, "admin@example.com", "StrongPass123", domain.RoleAdmin)
 	adminPair, _ := auth.IssuePair(cfg, admin.ID, admin.Email, admin.Role)
 

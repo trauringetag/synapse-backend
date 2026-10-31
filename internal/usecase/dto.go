@@ -30,10 +30,13 @@ type RefreshInput struct {
 	RawRefreshToken string
 }
 
-// LogoutInput — сырой refresh-токен из cookie для отзыва при выходе.
+// LogoutInput — сырой refresh-токен (из cookie, Bearer или JSON-тела) для
+// отзыва при выходе. HasRefreshToken означает, что HTTP-слой извлёк непустой
+// токен из РАЗРЕШЁННОГО источника (для Web-Flow это cookie, для Mobile-Flow —
+// Bearer/тело); пустой токен — успешный no-op (logout без токена допустим).
 type LogoutInput struct {
-	RawRefreshToken string // пустая строка, если cookie отсутствует
-	HasCookie       bool
+	RawRefreshToken string // пустая строка, если токен отсутствует
+	HasRefreshToken bool
 }
 
 // ListUsersInput — параметры списка пользователей (уже разобранные из query).

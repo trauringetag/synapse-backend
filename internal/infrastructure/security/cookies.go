@@ -32,6 +32,29 @@ func ClearTokenCookies(w http.ResponseWriter, cfg *config.Config) {
 	setCookie(w, cfg, RefreshCookie, "", expired)
 }
 
+// CSRFCookie — имя cookie двухсоставной CSRF-защиты (читается JS-ом,
+// поэтому HttpOnly=false; живёт на пути /api/v1/).
+const CSRFCookie = "csrf_token"
+
+// ClearAuthCookies полностью завершает браузерную сессию: сбрасывает
+// access_token, refresh_token И csrf_token (Max-Age=-1). Используется при
+// logout и самоудалении аккаунта (DELETE /users/me), чтобы браузер не
+// сохранил мёртвые, но долгоживущие auth-куки.
+func ClearAuthCookies(w http.ResponseWriter, cfg *config.Config) {
+	ClearTokenCookies(w, cfg)
+	http.SetCookie(w, &http.Cookie{
+		Name:     CSRFCookie,
+		Value:    "",
+		Path:     cfg.CookiePath,
+		Domain:   cfg.CookieDomain,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: false, // csrf_token выпускается JS-читаемой — удаляем симметрично
+		Secure:   cfg.CookieSecure,
+		SameSite: cfg.CookieSameSite,
+	})
+}
+
 func setCookie(w http.ResponseWriter, cfg *config.Config, name, value string, exp time.Time) {
 	c := &http.Cookie{
 		Name:     name,

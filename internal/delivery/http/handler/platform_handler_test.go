@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
 	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
@@ -314,6 +315,174 @@ func TestRegisterAdmin_MobilePlatform_ReturnsTokensInBody(t *testing.T) {
 		t.Errorf("Роль в мобильном ответе = %+v, ожидается admin", tr.User)
 	}
 	assertNoAuthCookies(t, rec)
+}
+
+// ---------------------------------------------------------------------------
+// РЕГРЕССИЯ: ЭКСФИЛЬТРАЦИЯ REFRESH-ТОКЕНА ЧЕРЕЗ ПОДМЕНУ X-Client-Platform
+// ---------------------------------------------------------------------------
+
+// csrfPairFor выдаёт валидную CSRF-пару (значение в cookie csrf_token и в
+// заголовке X-CSRF-Token — как делает браузер после GET /csrf).
+func csrfPairFor(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	v, err := auth.IssueCSRF(cfg.JWTSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// assertNoTokensInBody проверяет, что JSON-тело ответа не содержит полей
+// токенов (веб-контракт: токены живут только в HttpOnly cookie).
+func assertNoTokensInBody(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	body := rec.Body.String()
+	for _, k := range []string{"access_token", "refresh_token"} {
+		if strings.Contains(body, k) {
+			t.Errorf("Тело веб-ответа не должно содержать %q: %s", k, body)
+		}
+	}
+}
+
+// TestRefresh_CookieCredential_WinsOverMobileHeader — РЕГРЕССИОННЫЙ ТЕСТ
+// утечки токенов: запрос с валидной cookie refresh_token + поддельным
+// X-Client-Platform: mobile + валидным CSRF НЕ должен возвращать токены в
+// JSON-теле. Формат ответа определяется ИСТОЧНИКОМ credentials (cookie ->
+// Web-Flow: Set-Cookie), а не заявленной платформой.
+func TestRefresh_CookieCredential_WinsOverMobileHeader(t *testing.T) {
+	cfg := testConfig()
+	store := newMockStore()
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+
+	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
+	oldRefresh := cm[auth.RefreshCookie]
+
+	csrf := csrfPairFor(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: auth.RefreshCookie, Value: oldRefresh})
+	req.AddCookie(&http.Cookie{Name: "csrf_token", Value: csrf})
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set("Origin", "https://app.example")
+	req.Header.Set("X-Client-Platform", "mobile") // попытка эксфильтрации
+
+	rec := httptest.NewRecorder()
+	middleware.CSRF(cfg)(http.HandlerFunc(h.Refresh)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
+	}
+	// КРИТИЧНО: токенов в теле нет — Web-Flow принудительно выбран по cookie.
+	assertNoTokensInBody(t, rec)
+	assertMessage(t, rec, messages.TokensRefreshed)
+
+	// Ответ обязан содержать новые HttpOnly cookie (Web-Flow).
+	rotated := cookieMap(rec.Result().Cookies())
+	newRefresh := rotated[auth.RefreshCookie]
+	if newRefresh == "" || newRefresh == oldRefresh {
+		t.Error("Web-Flow не установил новый refresh-cookie")
+	}
+	if rotated[auth.AccessCookie] == "" {
+		t.Error("Web-Flow не установил access-cookie")
+	}
+}
+
+// TestRefresh_BearerWithoutCookies_MobileFlow — легитимный Mobile-Flow:
+// Authorization: Bearer <refresh> при отсутствии auth-cookie -> токены в
+// JSON-теле, cookie НЕ устанавливаются.
+func TestRefresh_BearerWithoutCookies_MobileFlow(t *testing.T) {
+	cfg := testConfig()
+	store := newMockStore()
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+
+	rec := httptest.NewRecorder()
+	h.Login(rec, mobileRequest("/api/v1/login", map[string]string{"email": "user@example.com", "password": "StrongPass123"}))
+	oldRefresh := decodeTokenResponse(t, rec).RefreshToken
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+oldRefresh)
+	req.Header.Set("X-Client-Platform", "mobile")
+	rec = httptest.NewRecorder()
+	h.Refresh(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
+	}
+	tr := decodeTokenResponse(t, rec)
+	if tr.RefreshToken == "" || tr.RefreshToken == oldRefresh {
+		t.Error("Mobile-Flow через Bearer должен ротировать токены в теле")
+	}
+	assertNoAuthCookies(t, rec)
+}
+
+// TestRefresh_BearerAndCookie_Conflict — смешанные credentials (Bearer +
+// cookie refresh_token одновременно) запрещены контрактом: 409 Conflict,
+// ротация не выполняется.
+func TestRefresh_BearerAndCookie_Conflict(t *testing.T) {
+	cfg := testConfig()
+	store := newMockStore()
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+
+	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
+	cookieRefresh := cm[auth.RefreshCookie]
+
+	// Второй (незаконно смешиваемый) источник — Bearer с другим активным токеном.
+	rec := httptest.NewRecorder()
+	h.Login(rec, mobileRequest("/api/v1/login", map[string]string{"email": "user@example.com", "password": "StrongPass123"}))
+	bearerRefresh := decodeTokenResponse(t, rec).RefreshToken
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+bearerRefresh)
+	req.AddCookie(&http.Cookie{Name: auth.RefreshCookie, Value: cookieRefresh})
+	rec = httptest.NewRecorder()
+	h.Refresh(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("Статус = %d, ожидается: 409; body = %s", rec.Code, rec.Body.String())
+	}
+	// Смешанный запрос не должен раскрывать токены ни в каком виде.
+	assertNoTokensInBody(t, rec)
+	// Ротация не выполнена: cookie-токен остался активен в хранилище.
+	if _, err := store.GetActive(nilCtx(), auth.HashToken(cookieRefresh)); err != nil {
+		t.Error("При 409 Conflict refresh-токен не должен быть отозван/ротирован")
+	}
+}
+
+// TestLogout_CookieCredential_WinsOverMobileHeader — та же защита для
+// /logout: cookie refresh_token + X-Client-Platform: mobile -> выход всё
+// равно чистит cookie (Web-Flow), несмотря на заявленную платформу.
+func TestLogout_CookieCredential_WinsOverMobileHeader(t *testing.T) {
+	cfg := testConfig()
+	store := newMockStore()
+	h := NewAuthHandler(cfg, newAuthUC(cfg, store))
+	seedUser(t, store, "user@example.com", "StrongPass123", domain.RoleUser)
+
+	cm := loginCookies(t, h, "user@example.com", "StrongPass123")
+	refresh := cm[auth.RefreshCookie]
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/logout", nil)
+	req.AddCookie(&http.Cookie{Name: auth.RefreshCookie, Value: refresh})
+	req.Header.Set("X-Client-Platform", "mobile")
+	rec := httptest.NewRecorder()
+	h.Logout(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Статус = %d, ожидается: 200; body = %s", rec.Code, rec.Body.String())
+	}
+	cleared := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.RefreshCookie && c.MaxAge == -1 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("Logout по cookie-credentials обязан сбросить refresh-cookie (Max-Age=-1)")
+	}
+	if _, err := store.GetActive(nilCtx(), auth.HashToken(refresh)); err == nil {
+		t.Error("Refresh-токен не отозван в хранилище")
+	}
 }
 
 // TestMobileRefreshViaBodyToken — альтернативный мобильный вход refresh: токен

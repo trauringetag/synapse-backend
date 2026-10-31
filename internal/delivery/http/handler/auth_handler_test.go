@@ -935,7 +935,7 @@ func TestFullTokenLifecycle(t *testing.T) {
 	cfg := testConfig()
 	store := newMockStore()
 	authH := NewAuthHandler(cfg, newAuthUC(cfg, store))
-	userH := NewUserHandler(newUserUC(store))
+	userH := NewUserHandler(testConfig(), newUserUC(store))
 	const origin = "https://app.example"
 
 	// ШАГ 1. Получаем CSRF-токен (cookie + тело ответа).

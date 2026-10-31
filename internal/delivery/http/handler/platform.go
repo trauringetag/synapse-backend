@@ -43,40 +43,108 @@ func bearerToken(r *http.Request) string {
 
 const refreshCookieName = "refresh_token"
 
+// credentialSource — фактический источник credentials для /refresh и /logout.
+// Формат ответа (Web-Flow cookie vs Mobile-Flow JSON) определяется ИМЕННО им,
+// а не заявленным заголовком X-Client-Platform: заголовок контролируется
+// клиентом и может быть подделан (эксфильтрация refresh/access токенов в
+// JSON-теле веб-сессией). Браузер отправляет cookie автоматически ->
+// наличие cookie refresh_token всегда означает Web-Flow.
+type credentialSource int
+
+const (
+	sourceNone credentialSource = iota
+	// sourceCookie — HttpOnly cookie refresh_token (веб-клиент): ответ
+	// всегда через Set-Cookie, токены в теле НЕ возвращаются.
+	sourceCookie
+	// sourceBearer — Authorization: Bearer <refresh> без auth-cookie
+	// (мобильный/серверный клиент): токены в JSON-теле.
+	sourceBearer
+	// sourceBody — JSON-поле {"refresh_token": "..."} без cookie/Bearer
+	// (альтернатива для мобильных): токены в JSON-теле.
+	sourceBody
+	// sourceConflict — смешанные credentials (Bearer + cookie одновременно).
+	// Контрактом это запрещено: приоритет источников фиксирован, смешивание
+	// исключено -> 409 Conflict, ротация не выполняется.
+	sourceConflict
+)
+
+// hasAuthCookies проверяет наличие ЛЮБОЙ авторизационной cookie в запросе
+// (access_token или refresh_token). Это индикатор браузерного (cookie)
+// клиента: такой запрос никогда не должен получать токены в JSON-теле.
+func hasAuthCookies(r *http.Request) bool {
+	if _, err := r.Cookie(refreshCookieName); err == nil {
+		return true
+	}
+	if _, err := r.Cookie("access_token"); err == nil {
+		return true
+	}
+	return false
+}
+
+// bodyRefreshToken читает refresh_token из JSON-тела без потребления тела
+// (буфер возвращается обратно в r.Body). Пустая строка — поля нет/тело не JSON.
+func bodyRefreshToken(r *http.Request) string {
+	if r.Method != http.MethodPost || r.Body == nil || r.ContentLength == 0 {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, middleware.MaxJSONBodyBytes+1))
+	r.Body.Close()
+	r.Body = io.NopCloser(strings.NewReader(string(b)))
+	if err != nil || int64(len(b)) > middleware.MaxJSONBodyBytes {
+		return ""
+	}
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if json.Unmarshal(b, &body) != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.RefreshToken)
+}
+
 // refreshCredential извлекает refresh-токен для POST /refresh и POST /logout
-// с чётким приоритетом источников (смешивание исключено):
-//  1. Authorization: Bearer <refresh_token> — мобильные/серверные клиенты;
-//  2. HttpOnly cookie refresh_token — веб-клиенты;
-//  3. JSON-поле {"refresh_token": "..."} в теле запроса — альтернатива для
-//     мобильных клиентов (тело читается без потребления: буфер возвращается
-//     обратно в r.Body).
+// вместе с фактическим источником credentials (source), который определяет
+// формат ответа:
+//  1. Cookie refresh_token -> sourceCookie (Web-Flow): даже если клиент заявил
+//     X-Client-Platform: mobile — это защита от эксфильтрации токенов через
+//     подмену заголовка;
+//  2. Bearer + cookie одновременно -> sourceConflict (409, токен не используется);
+//  3. Bearer без auth-cookie -> sourceBearer (Mobile-Flow);
+//  4. JSON-поле {"refresh_token": "..."} без cookie/Bearer -> sourceBody
+//     (Mobile-Flow; тело читается без потребления).
 //
-// hasToken == false означает, что ни один источник не предоставил непустой
-// токен (для /logout это допустимо: возвращается 200 без отзыва сессии).
-func refreshCredential(r *http.Request) (token string, hasToken bool) {
-	// Приоритет 1: Bearer.
-	if t := bearerToken(r); t != "" {
-		return t, true
+// token == "" означает, что ни один источник не предоставил непустой токен
+// (для /logout это допустимо: возвращается 200 без отзыва сессии).
+func refreshCredential(r *http.Request) (token string, source credentialSource) {
+	bearer := bearerToken(r)
+	cookieVal := ""
+	if c, err := r.Cookie(refreshCookieName); err == nil {
+		cookieVal = c.Value
 	}
-	// Приоритет 2: cookie.
-	if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
-		return c.Value, true
-	}
-	// Приоритет 3: JSON-тело (только POST с содержимым).
-	if r.Method == http.MethodPost && r.Body != nil && r.ContentLength != 0 {
-		b, err := io.ReadAll(io.LimitReader(r.Body, middleware.MaxJSONBodyBytes+1))
-		r.Body.Close()
-		r.Body = io.NopCloser(strings.NewReader(string(b)))
-		if err == nil && int64(len(b)) <= middleware.MaxJSONBodyBytes {
-			var body struct {
-				RefreshToken string `json:"refresh_token"`
-			}
-			if json.Unmarshal(b, &body) == nil && strings.TrimSpace(body.RefreshToken) != "" {
-				return strings.TrimSpace(body.RefreshToken), true
-			}
+
+	switch {
+	case cookieVal != "" && bearer != "":
+		// Смешанные credentials запрещены контрактом.
+		return "", sourceConflict
+	case cookieVal != "":
+		// Приоритет cookie: Web-Flow принудительно, заголовок платформы игнорируется.
+		return cookieVal, sourceCookie
+	case bearer != "":
+		if hasAuthCookies(r) {
+			// Bearer + auth-cookie (даже пустая) — неоднозначный браузерный
+			// запрос: мобильный JSON-формат браузеру не отдаём.
+			return "", sourceConflict
 		}
+		return bearer, sourceBearer
+	default:
+		if t := bodyRefreshToken(r); t != "" {
+			if hasAuthCookies(r) {
+				return "", sourceConflict
+			}
+			return t, sourceBody
+		}
+		return "", sourceNone
 	}
-	return "", false
 }
 
 // tokenResponse — контракт ответа для мобильных клиентов

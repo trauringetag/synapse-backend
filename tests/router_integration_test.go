@@ -101,63 +101,63 @@ const (
 	webOrigin = "https://app.example.com"
 )
 
-// csrfPair выдаёт валидную CSRF-пару (значение одинаково в cookie csrf_token
-// и заголовке X-CSRF-Token — как это делает браузер после GET /csrf).
-func csrfPair(t *testing.T, cfg *config.Config) string {
-	t.Helper()
-	v, err := auth.IssueCSRF(cfg.JWTSecret)
-	if err != nil {
-		t.Fatalf("issue csrf: %v", err)
-	}
-	return v
-}
+// // csrfPair выдаёт валидную CSRF-пару (значение одинаково в cookie csrf_token
+// // и заголовке X-CSRF-Token — как это делает браузер после GET /csrf).
+// func csrfPair(t *testing.T, cfg *config.Config) string {
+// 	t.Helper()
+// 	v, err := auth.IssueCSRF(cfg.JWTSecret)
+// 	if err != nil {
+// 		t.Fatalf("issue csrf: %v", err)
+// 	}
+// 	return v
+// }
 
-// postJSON выполняет POST с JSON-телом и произвольными заголовками.
-func (e *testEnv) postJSON(t *testing.T, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
-	t.Helper()
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req := httptest.NewRequest(http.MethodPost, path, rdr)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range headers {
-		switch k {
-		case "Cookie":
-			req.Header.Add(k, v) // cookie-заголовки накапливаются
-		default:
-			req.Header.Set(k, v)
-		}
-	}
-	rec := httptest.NewRecorder()
-	e.srv.ServeHTTP(rec, req)
-	return rec
-}
+// // postJSON выполняет POST с JSON-телом и произвольными заголовками.
+// func (e *testEnv) postJSON(t *testing.T, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+// 	t.Helper()
+// 	var rdr io.Reader
+// 	if body != nil {
+// 		b, err := json.Marshal(body)
+// 		if err != nil {
+// 			t.Fatalf("marshal: %v", err)
+// 		}
+// 		rdr = bytes.NewReader(b)
+// 	}
+// 	req := httptest.NewRequest(http.MethodPost, path, rdr)
+// 	if body != nil {
+// 		req.Header.Set("Content-Type", "application/json")
+// 	}
+// 	for k, v := range headers {
+// 		switch k {
+// 		case "Cookie":
+// 			req.Header.Add(k, v) // cookie-заголовки накапливаются
+// 		default:
+// 			req.Header.Set(k, v)
+// 		}
+// 	}
+// 	rec := httptest.NewRecorder()
+// 	e.srv.ServeHTTP(rec, req)
+// 	return rec
+// }
 
-// webAuthHeaders — заголовки веб-клиента для state-changing эндпоинтов под
-// защитой CSRF: разрешённый Origin + CSRF-пара (cookie csrf_token +
-// заголовок X-CSRF-Token).
-func (e *testEnv) webAuthHeaders(t *testing.T) map[string]string {
-	csrf := csrfPair(t, e.cfg)
-	return map[string]string{
-		"Origin":       webOrigin,
-		"Cookie":       "csrf_token=" + csrf,
-		"X-CSRF-Token": csrf,
-	}
-}
+// // webAuthHeaders — заголовки веб-клиента для state-changing эндпоинтов под
+// // защитой CSRF: разрешённый Origin + CSRF-пара (cookie csrf_token +
+// // заголовок X-CSRF-Token).
+// func (e *testEnv) webAuthHeaders(t *testing.T) map[string]string {
+// 	csrf := csrfPair(t, e.cfg)
+// 	return map[string]string{
+// 		"Origin":       webOrigin,
+// 		"Cookie":       "csrf_token=" + csrf,
+// 		"X-CSRF-Token": csrf,
+// 	}
+// }
 
-// mobileAuthHeaders — заголовки мобильного клиента: только декларация
-// платформы; Bearer/cookie/CSRF не требуются (безопасность определяется
-// фактическим способом аутентификации, а не заголовком).
-func mobileAuthHeaders() map[string]string {
-	return map[string]string{"X-Client-Platform": "mobile"}
-}
+// // mobileAuthHeaders — заголовки мобильного клиента: только декларация
+// // платформы; Bearer/cookie/CSRF не требуются (безопасность определяется
+// // фактическим способом аутентификации, а не заголовком).
+// func mobileAuthHeaders() map[string]string {
+// 	return map[string]string{"X-Client-Platform": "mobile"}
+// }
 
 // registerUser создаёт пользователя напрямую через mockStore (bcrypt-хеш),
 // минуя HTTP /register: интеграционные тесты фокусируются на flows
@@ -371,17 +371,17 @@ func decodeMobileTokens(t *testing.T, rec *httptest.ResponseRecorder) mobileToke
 	return tr
 }
 
-// globalBodyOK — страховка интеграционных тестов: успешные ответы не должны
-// попадать в счётчики rate limiter ("Слишком много запросов"). Если из-за
-// регрессии лимиты начнут считать по ответу (а не по телу запроса), тест
-// упадёт здесь явно, а не мутной ошибкой дальше по flow.
-func globalBodyOK(t *testing.T, rec *httptest.ResponseRecorder, what string) {
-	t.Helper()
-	body := rec.Body.String()
-	if strings.Contains(body, "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u0437\u0430\u043f\u0440\u043e\u0441\u043e\u0432") || strings.Contains(body, "Too Many Requests") {
-		t.Fatalf("%s: unexpected rate-limit response (код %d, тело %s)", what, rec.Code, body)
-	}
-}
+// // globalBodyOK — страховка интеграционных тестов: успешные ответы не должны
+// // попадать в счётчики rate limiter ("Слишком много запросов"). Если из-за
+// // регрессии лимиты начнут считать по ответу (а не по телу запроса), тест
+// // упадёт здесь явно, а не мутной ошибкой дальше по flow.
+// func globalBodyOK(t *testing.T, rec *httptest.ResponseRecorder, what string) {
+// 	t.Helper()
+// 	body := rec.Body.String()
+// 	if strings.Contains(body, "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u0437\u0430\u043f\u0440\u043e\u0441\u043e\u0432") || strings.Contains(body, "Too Many Requests") {
+// 		t.Fatalf("%s: unexpected rate-limit response (код %d, тело %s)", what, rec.Code, body)
+// 	}
+// }
 
 func assertNoSetCookie(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()

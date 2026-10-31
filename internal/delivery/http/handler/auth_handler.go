@@ -138,8 +138,29 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	// Вход: cookie refresh_token (веб) ИЛИ Authorization: Bearer <refresh>
 	// (мобильные) ИЛИ {"refresh_token": "..."} в теле (альтернатива для
 	// мобильных). Приоритет источников фиксирован, смешивание исключено.
-	raw, _ := refreshCredential(r)
-	mobile := isMobilePlatform(r)
+	//
+	// ФОРМАТ ответа определяется ИМЕННО фактическим источником credentials,
+	// а не заголовком X-Client-Platform: браузер (HttpOnly cookie) не может
+	// эксфильтровать долгоживущие refresh/access токены в JSON-теле просто
+	// подменив заголовок платформы. Заголовок учитывается только когда
+	// credentials реально пришли от мобильного клиента (Bearer/тело).
+	raw, source := refreshCredential(r)
+	switch source {
+	case sourceConflict:
+		// Смешанные credentials (Bearer + cookie): неоднозначный запрос —
+		// 409 Conflict, ротация не выполняется.
+		response.Error(w, http.StatusConflict, messages.MixedCredentialsNotAllowed, nil)
+		return
+	case sourceNone:
+		// Ни один источник не предоставил токен — ротация не выполняется.
+		response.Error(w, http.StatusUnauthorized, messages.InvalidOrExpiredRefreshToken, nil)
+		return
+	}
+	// Web-Flow принудительно при cookie; Mobile-Flow (JSON) — только для
+	// Bearer/тела, и только если клиент заявил мобильную платформу
+	// (не-мобильный клиент с телом получает cookie-формат — обратная
+	// совместимость).
+	mobile := source != sourceCookie && isMobilePlatform(r)
 
 	res, err := h.uc.Refresh(r.Context(), usecase.RefreshInput{RawRefreshToken: raw})
 	if err != nil {
@@ -177,12 +198,33 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	// Для мобильных refresh-токен принимается из Bearer или JSON-тела
 	// ({"refresh_token": "..."}), поскольку cookie нет. Если токен отсутствует —
 	// logout всё равно возвращает 200, но сессия в БД не отзывается.
-	raw, hasToken := refreshCredential(r)
-	mobile := isMobilePlatform(r)
+	raw, source := refreshCredential(r)
+	switch source {
+	case sourceConflict:
+		// Смешанные credentials (Bearer + cookie): сессия не отзывается,
+		// cookies не сбрасываются — 409 до тех пор, пока клиент не начнёт
+		// использовать ровно один источник.
+		response.Error(w, http.StatusConflict, messages.MixedCredentialsNotAllowed, nil)
+		return
+	case sourceNone:
+		// Logout без токена допустим: возвращаем 200, отзываем cookie-сессию
+		// веб-клиента (Set-Cookie Max-Age=-1) даже если refresh_token пуст.
+		mobile := isMobilePlatform(r)
+		if !mobile {
+			auth.ClearTokenCookies(w, h.cfg)
+		}
+		response.JSON(w, http.StatusOK, messageResponse{Message: messages.LoggedOut})
+		return
+	}
+	// Формат ответа привязан к фактическому источнику credentials, а не к
+	// заявленной платформе: cookie -> Web-Flow (сброс auth-cookie),
+	// Bearer/тело -> Mobile-Flow (JSON). Заголовок X-Client-Platform на это
+	// влиять не должен.
+	mobile := (source == sourceBearer || source == sourceBody) && isMobilePlatform(r)
 
 	if err := h.uc.Logout(r.Context(), usecase.LogoutInput{
 		RawRefreshToken: raw,
-		HasCookie:       hasToken,
+		HasRefreshToken: raw != "",
 	}); err != nil {
 		if !mobile {
 			auth.ClearTokenCookies(w, h.cfg)

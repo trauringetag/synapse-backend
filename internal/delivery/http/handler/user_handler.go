@@ -14,17 +14,25 @@ import (
 
 	"github.com/trauringetag/synapse-backend/internal/delivery/http/response"
 	"github.com/trauringetag/synapse-backend/internal/domain"
+	"github.com/trauringetag/synapse-backend/internal/infrastructure/config"
 	"github.com/trauringetag/synapse-backend/internal/infrastructure/middleware"
+	auth "github.com/trauringetag/synapse-backend/internal/infrastructure/security"
 	"github.com/trauringetag/synapse-backend/internal/messages"
 	"github.com/trauringetag/synapse-backend/internal/usecase"
 )
 
 type UserHandler struct {
-	uc usecase.UserUseCase
+	cfg *config.Config
+	uc  usecase.UserUseCase
 }
 
-func NewUserHandler(uc usecase.UserUseCase) *UserHandler {
-	return &UserHandler{uc: uc}
+// NewUserHandler принимает cfg для очистки auth-cookie при самоудалении
+// аккаунта (DELETE /users/me): браузер должен получить инструкции на
+// удаление access_token/refresh_token/csrf_token, а не хранить мёртвые
+// долгоживущие куки. cfg может быть nil (обратная совместимость тестов) —
+// в этом случае cookie-очистка пропускается.
+func NewUserHandler(cfg *config.Config, uc usecase.UserUseCase) *UserHandler {
+	return &UserHandler{cfg: cfg, uc: uc}
 }
 
 type putUserRequest struct {
@@ -240,7 +248,10 @@ func (h *UserHandler) Patch(w http.ResponseWriter, r *http.Request) {
 // DeleteMe — самоудаление (физическое удаление, hard delete) текущего пользователя:
 // DELETE /api/v1/users/me. Требует валидный access_token и CSRF-пару
 // (state-changing запрос защищается middleware.CSRF на уровне роутера).
-// Успех — 204 No Content; все refresh-токены пользователя отзываются.
+// Успех — 204 No Content; все refresh-токены пользователя отзываются, а
+// браузер получает инструкции на удаление auth-cookie (access_token,
+// refresh_token, csrf_token с Max-Age=-1) — иначе мёртвые, но долгоживущие
+// HttpOnly-куки остались бы в браузере удалённого аккаунта.
 func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	p, ok := middleware.FromContext(r.Context())
 	if !ok {
@@ -250,6 +261,13 @@ func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	if err := h.uc.DeleteMe(r.Context(), p.ID); err != nil {
 		respondError(w, err)
 		return
+	}
+	// Очистка сессии: отзыв в БД выполнен выше (usecase), теперь сбрасываем
+	// куки. Мобильный клиент работает через Bearer и куки не хранит, но
+	// заголовок платформы не влияет на очистку: Set-Cookie без соответствующих
+	// куки в браузере просто игнорируется.
+	if h.cfg != nil {
+		auth.ClearAuthCookies(w, h.cfg)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

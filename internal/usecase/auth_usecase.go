@@ -308,7 +308,7 @@ func (uc *AuthUseCaseImpl) Refresh(ctx context.Context, in RefreshInput) (*Refre
 // Logout отзывает refresh-токен (если он присутствует). Сброс cookie выполняет
 // HTTP-слой.
 func (uc *AuthUseCaseImpl) Logout(ctx context.Context, in LogoutInput) error {
-	if in.HasCookie && in.RawRefreshToken != "" {
+	if in.HasRefreshToken && in.RawRefreshToken != "" {
 		if err := uc.tokens.Revoke(ctx, HashToken(in.RawRefreshToken)); err != nil {
 			log.Printf("event=logout_refresh_revoke_failed error_type=%T", err)
 			return wrapErr(ErrCodeInternal, messages.FailedToRevokeRefreshToken, err)

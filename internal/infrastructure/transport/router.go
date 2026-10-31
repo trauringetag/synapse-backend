@@ -24,7 +24,7 @@ import (
 // него, без прямых SQL-запросов и зависимостей от пула БД.
 func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseCase, last middleware.UserLookup, rateLimitStore domain.RateLimitStore, openAPI []byte) http.Handler {
 	authH := handler.NewAuthHandler(cfg, authUC)
-	userH := handler.NewUserHandler(userUC)
+	userH := handler.NewUserHandler(cfg, userUC)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)

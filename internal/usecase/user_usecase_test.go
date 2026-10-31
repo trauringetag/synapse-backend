@@ -932,10 +932,10 @@ func TestUserUseCase_DeleteMe(t *testing.T) {
 	tests := []struct {
 		name string
 
-		getFunc    func(ctx context.Context, id uuid.UUID) (*domain.User, error)
-		revokeFunc func(ctx context.Context, id uuid.UUID) error
+		getFunc        func(ctx context.Context, id uuid.UUID) (*domain.User, error)
+		revokeFunc     func(ctx context.Context, id uuid.UUID) error
 		deleteFunc     func(ctx context.Context, id uuid.UUID) error
-deleteSelfFunc func(ctx context.Context, id uuid.UUID) error
+		deleteSelfFunc func(ctx context.Context, id uuid.UUID) error
 
 		wantErr     bool
 		wantCode    ErrorCode

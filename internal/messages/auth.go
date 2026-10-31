@@ -17,6 +17,13 @@ const (
 	InvalidOrExpiredRefreshToken = "Недействительный или просроченный Refresh-токен"
 	RevokedOrUnknownRefreshToken = "Refresh-токен отозван или неизвестен"
 
+	// MixedCredentialsNotAllowed — запрос содержит одновременно auth-cookie и
+	// Authorization: Bearer (или refresh_token в теле). Контрактом разрешён
+	// ровно один источник credentials: смешивание исключает неоднозначность
+	// формата ответа и блокирует эксфильтрацию cookie-сессии в мобильный
+	// JSON-формат через подмену X-Client-Platform.
+	MixedCredentialsNotAllowed = "Одновременное использование Cookie и Authorization заголовка не допускается"
+
 	InvalidAdminToken = "Доступ к данному контуру ограничен"
 
 	UnexpectedSigningMethod = "Неожиданный метод подписания"

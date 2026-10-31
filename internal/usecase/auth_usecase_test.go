@@ -698,7 +698,7 @@ func TestAuthUseCase_Logout_WithCookie(t *testing.T) {
 
 	err := f.uc.Logout(context.Background(), LogoutInput{
 		RawRefreshToken: "refresh-token-raw",
-		HasCookie:       true,
+		HasRefreshToken: true,
 	})
 
 	require.NoError(t, err)
@@ -709,7 +709,7 @@ func TestAuthUseCase_Logout_WithCookie(t *testing.T) {
 func TestAuthUseCase_Logout_NoCookie_IsNoop(t *testing.T) {
 	f := newAuthFixture()
 
-	err := f.uc.Logout(context.Background(), LogoutInput{HasCookie: false})
+	err := f.uc.Logout(context.Background(), LogoutInput{HasRefreshToken: false})
 
 	require.NoError(t, err, "выход без cookie — успешный no-op")
 	assert.Zero(t, f.tokens.CountCalls("Revoke"))
@@ -718,7 +718,7 @@ func TestAuthUseCase_Logout_NoCookie_IsNoop(t *testing.T) {
 func TestAuthUseCase_Logout_EmptyTokenWithCookie_IsNoop(t *testing.T) {
 	f := newAuthFixture()
 
-	err := f.uc.Logout(context.Background(), LogoutInput{HasCookie: true, RawRefreshToken: ""})
+	err := f.uc.Logout(context.Background(), LogoutInput{HasRefreshToken: true, RawRefreshToken: ""})
 
 	require.NoError(t, err)
 	assert.Zero(t, f.tokens.CountCalls("Revoke"))
@@ -731,7 +731,7 @@ func TestAuthUseCase_Logout_RevokeFailure(t *testing.T) {
 
 	err := f.uc.Logout(context.Background(), LogoutInput{
 		RawRefreshToken: "refresh-token-raw",
-		HasCookie:       true,
+		HasRefreshToken: true,
 	})
 
 	ue := requireUseCaseErr(t, err, ErrCodeInternal)
