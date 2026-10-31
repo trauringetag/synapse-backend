@@ -12,18 +12,28 @@ import (
 )
 
 type Config struct {
-	AppPort                string
-	AppEnv                 string
-	DatabaseURL            string
-	JWTSecret              []byte
-	AccessTTL              time.Duration
-	RefreshTTL             time.Duration
-	AdminRegisterToken     string
-	CookieSecure           bool
-	CookieSameSite         http.SameSite
-	CookieDomain           string
-	CookiePath             string
-	CORSOrigins            []string
+	AppPort string
+	// AppEnv — имя/описание сервиса (историческое поле, не окружение запуска).
+	AppEnv string
+	// Environment — режим развёртывания (ENVIRONMENT): development (по умолчанию),
+	// staging, production. В production включается fail-fast валидация (SEC-03):
+	// запуск с дефолтными секретами/небезопасными настройками невозможен.
+	Environment        string
+	DatabaseURL        string
+	JWTSecret          []byte
+	AccessTTL          time.Duration
+	RefreshTTL         time.Duration
+	AdminRegisterToken string
+	CookieSecure       bool
+	CookieSameSite     http.SameSite
+	CookieDomain       string
+	CookiePath         string
+	CORSOrigins        []string
+	// TrustedProxies — whitelist доверенных reverse-прокси (TRUSTED_PROXIES,
+	// CSV: точные IP или CIDR). Определяет, кому RealIP разрешает переопределять
+	// клиентский адрес заголовками X-Forwarded-For/X-Real-IP/True-Client-IP (SEC-05).
+	// Пустой список ⇒ заголовки игнорируются полностью, используется r.RemoteAddr.
+	TrustedProxies         []string
 	LoginRateLimit         int
 	RegisterRateLimit      int
 	RefreshRateLimit       int
@@ -37,6 +47,30 @@ type Config struct {
 	// регистрации). Записи старше window_start + maxWindow удаляются.
 	RateLimitMaxWindowSeconds int
 }
+
+// SEC-03: дефолтные/небезопасные значения, которые запрещены в production.
+// Совпадение с любым из них (или префикс CHANGE_ME_*) — fail-fast при запуске.
+const (
+	// DefaultJWTSecret — историческое значение по умолчанию из старых версий .env.example.
+	DefaultJWTSecret = "change-me-to-a-long-random-secret"
+	// DefaultAdminRegisterToken — историческое значение по умолчанию.
+	DefaultAdminRegisterToken = "change-me-admin-register-token"
+)
+
+// DefaultInsecureSecrets — список значений JWT_SECRET, наличие которых в
+// production означает, что секрет никто не менял.
+var DefaultInsecureSecrets = []string{
+	DefaultJWTSecret,
+	"secret",
+	"changeme",
+	"change-me",
+	"change-me-to-a-long-random-secret",
+	"test-secret-key-for-development-only",
+}
+
+// placeholderPrefix — плейсхолдеры из .env.example, которые принципиально не
+// должны допускаться к запуску ни в одном окружении (в особенности в production).
+const placeholderPrefix = "CHANGE_ME_"
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -59,10 +93,19 @@ func Load() (*Config, error) {
 	if len(secret) < 32 {
 		return nil, fmt.Errorf("JWT_SECRET должен содержать не менее 32 символов для безопасной работы алгоритма HS256")
 	}
+	// Плейсхолдеры из .env.example (CHANGE_ME_*) не должны проходить валидацию
+	// запуска НИ В ОДНОМ окружении — иначе продакши-деплой «случайно» стартует
+	// с общеизвестным секретом.
+	if strings.HasPrefix(secret, placeholderPrefix) {
+		return nil, fmt.Errorf("JWT_SECRET содержит плейсхолдер %q: сгенерируйте случайный секрет (например, openssl rand -base64 48)", placeholderPrefix+"...")
+	}
 
 	adminToken := env("ADMIN_REGISTER_TOKEN", "")
 	if adminToken == "" {
 		return nil, fmt.Errorf("Необходимо указать ADMIN_REGISTER_TOKEN")
+	}
+	if strings.HasPrefix(adminToken, placeholderPrefix) {
+		return nil, fmt.Errorf("ADMIN_REGISTER_TOKEN содержит неизменённый плейсхолдер %q", placeholderPrefix+"...")
 	}
 
 	dbURL := env("DATABASE_URL", "")
@@ -91,9 +134,18 @@ func Load() (*Config, error) {
 		}
 	}
 
-	return &Config{
+	trustedProxies := []string{}
+	for _, p := range strings.Split(env("TRUSTED_PROXIES", ""), ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			trustedProxies = append(trustedProxies, p)
+		}
+	}
+
+	cfg := &Config{
 		AppPort:                   env("APP_PORT", "8080"),
 		AppEnv:                    env("APP_ENV", "synapse-backend"),
+		Environment:               strings.ToLower(env("ENVIRONMENT", "development")),
 		DatabaseURL:               dbURL,
 		JWTSecret:                 []byte(secret),
 		AccessTTL:                 accessTTL,
@@ -104,6 +156,7 @@ func Load() (*Config, error) {
 		CookieDomain:              env("COOKIE_DOMAIN", ""),
 		CookiePath:                "/api/v1/",
 		CORSOrigins:               origins,
+		TrustedProxies:            trustedProxies,
 		LoginRateLimit:            intEnv("LOGIN_RATE_LIMIT", 10),
 		RegisterRateLimit:         intEnv("REGISTER_RATE_LIMIT", 10),
 		RefreshRateLimit:          intEnv("REFRESH_RATE_LIMIT", 30),
@@ -111,7 +164,76 @@ func Load() (*Config, error) {
 		AuthenticatedRateLimit:    intEnv("AUTHENTICATED_RATE_LIMIT", 600),
 		RateLimitCleanupInterval:  cleanupInterval,
 		RateLimitMaxWindowSeconds: intEnv("RATE_LIMIT_MAX_WINDOW_SECONDS", 3600),
-	}, nil
+	}
+
+	// Fail-fast (SEC-03): в production запуск с дефолтными/небезопасными
+	// значениями невозможен — ошибка вернётся сюда же, main.go завершится
+	// log.Fatalf до поднятия HTTP-сервера.
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// isProduction возвращает true, если окружение развёртывания — production.
+func (c *Config) isProduction() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Environment), "production")
+}
+
+// Validate выполняет fail-fast проверку конфигурации (SEC-03). Вне production
+// проверка ограничивается базовыми инвариантами; в production дополнительно
+// запрещены: дефолтный/плейсхолдерный JWT_SECRET, COOKIE_SECURE=false и
+// DATABASE_URL с sslmode=disable. Все найденные проблемы возвращаются одной
+// сводной ошибкой, чтобы один запуск показал полный список.
+func (c *Config) Validate() error {
+	var problems []string
+
+	// Базовые инварианты (для всех окружений).
+	if len(c.JWTSecret) < 32 {
+		problems = append(problems, fmt.Sprintf(
+			"JWT_SECRET слишком короткий (%d байт; требуется не менее 32)", len(c.JWTSecret)))
+	}
+	if string(c.JWTSecret) == "" {
+		problems = append(problems, "JWT_SECRET не задан")
+	}
+
+	if !c.isProduction() {
+		if len(problems) > 0 {
+			return fmt.Errorf("некорректная конфигурация: %s", strings.Join(problems, "; "))
+		}
+		return nil
+	}
+
+	// Production: секреты не должны совпадать с дефолтными/плейсхолдерными.
+	secrets := string(c.JWTSecret)
+	if strings.HasPrefix(secrets, placeholderPrefix) {
+		problems = append(problems, "JWT_SECRET содержит неизменённый плейсхолдер CHANGE_ME_*")
+	} else {
+		for _, bad := range DefaultInsecureSecrets {
+			if secrets == bad {
+				problems = append(problems, fmt.Sprintf(
+					"JWT_SECRET совпадает с общеизвестным дефолтным значением %q", bad))
+				break
+			}
+		}
+	}
+	if strings.HasPrefix(c.AdminRegisterToken, placeholderPrefix) ||
+		c.AdminRegisterToken == DefaultAdminRegisterToken {
+		problems = append(problems, "ADMIN_REGISTER_TOKEN содержит дефолтное/плейсхолдерное значение")
+	}
+
+	// Production: secure-cookie и TLS к БД обязательны.
+	if !c.CookieSecure {
+		problems = append(problems, "COOKIE_SECURE=false в production недопустим (auth-куки уходят по HTTP)")
+	}
+	if strings.Contains(strings.ToLower(c.DatabaseURL), "sslmode=disable") {
+		problems = append(problems, "DATABASE_URL содержит sslmode=disable — в production обязано TLS-соединение с PostgreSQL")
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("fail-fast (ENVIRONMENT=production): %s", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 func env(key, fallback string) string {

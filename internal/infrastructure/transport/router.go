@@ -28,7 +28,11 @@ func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseC
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
+	// SEC-05: chimw.RealIP без whitelist прокси доверяет любому X-Forwarded-For,
+	// что позволяло подделывать IP для обхода rate-limiting. Используем
+	// собственный middleware: заголовки применяются только если запрос пришёл
+	// от прокси из cfg.TrustedProxies; пустой список ⇒ всегда r.RemoteAddr.
+	r.Use(middleware.RealIPFromTrustedProxies(cfg))
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(middleware.SecurityHeaders)

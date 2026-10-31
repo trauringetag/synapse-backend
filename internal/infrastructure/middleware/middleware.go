@@ -238,6 +238,124 @@ func RateLimit(store RateLimitStore, limit int, window time.Duration, keyFn func
 	}
 }
 
+// SEC-05: заголовки, позволяющие переопределить клиентский адрес. Читаются
+// ТОЛЬКО если сам запрос пришёл от доверенного прокси (Config.TrustedProxies).
+var (
+	trueClientIPEndpoint = http.CanonicalHeaderKey("True-Client-IP")
+	xRealIPEndpoint      = http.CanonicalHeaderKey("X-Real-IP")
+	xForwardedForEndpoin = http.CanonicalHeaderKey("X-Forwarded-For")
+)
+
+// trustedProxy — элемент whitelist'а: точный IP или CIDR-сеть.
+type trustedProxy struct {
+	ip   net.IP
+	netw *net.IPNet
+}
+
+// parseTrustedProxies конвертирует строки конфига (точные IP или CIDR) в
+// матчеры. Некорректные значения игнорируются (шумный fail-fast здесь не
+// требуется: недоверенный прокси просто не попадёт в whitelist).
+func parseTrustedProxies(entries []string) ([]trustedProxy, error) {
+	out := make([]trustedProxy, 0, len(entries))
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if strings.Contains(e, "/") {
+			_, n, err := net.ParseCIDR(e)
+			if err != nil {
+				continue
+			}
+			out = append(out, trustedProxy{netw: n})
+			continue
+		}
+		ip := net.ParseIP(e)
+		if ip == nil {
+			continue
+		}
+		out = append(out, trustedProxy{ip: ip})
+	}
+	return out, nil
+}
+
+// hostOf извлекает хост из RemoteAddr вида "ip:port" (IPv6 в скобках).
+func hostOf(remoteAddr string) string {
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return h
+	}
+	return remoteAddr
+}
+
+// isTrustedProxy проверяет, входит ли хост RemoteAddr в whitelist.
+func isTrustedProxy(remoteAddr string, parsed []trustedProxy) bool {
+	if len(parsed) == 0 {
+		return false
+	}
+	ip := net.ParseIP(hostOf(strings.TrimSpace(remoteAddr)))
+	if ip == nil {
+		return false
+	}
+	for _, tp := range parsed {
+		if tp.netw != nil {
+			if tp.netw.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if tp.ip.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIPFromHeaders вычисляет адрес клиента из заголовков прокси:
+// True-Client-IP → X-Real-IP → первый элемент X-Forwarded-For. Пустая строка,
+// если ничего валидного не найдено.
+func clientIPFromHeaders(h http.Header) string {
+	v := h.Get(trueClientIPEndpoint)
+	if v == "" {
+		v = h.Get(xRealIPEndpoint)
+	}
+	if v == "" {
+		if xff := h.Get(xForwardedForEndpoin); xff != "" {
+			if i := strings.Index(xff, ","); i >= 0 {
+				xff = xff[:i]
+			}
+			v = xff
+		}
+	}
+	v = strings.TrimSpace(v)
+	if v == "" || net.ParseIP(v) == nil {
+		return ""
+	}
+	return v
+}
+
+// RealIPFromTrustedProxies — безопасная замена chimw.RealIP (SEC-05):
+// заголовки X-Forwarded-For / X-Real-IP / True-Client-IP применяются только
+// когда запрос пришёл от прокси из whitelist cfg.TrustedProxies. Иначе
+// используется фактический r.RemoteAddr — подделкой заголовка нельзя ни
+// обходить rate-limiting по IP, ни «подменить» источник события.
+//
+// Обновляется r.RemoteAddr: все последующие middleware (Logger, RateLimit
+// через ClientIP) читают именно его.
+func RealIPFromTrustedProxies(cfg *config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		parsed, _ := parseTrustedProxies(cfg.TrustedProxies)
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			if len(parsed) > 0 && isTrustedProxy(r.RemoteAddr, parsed) {
+				if rip := clientIPFromHeaders(r.Header); rip != "" {
+					r.RemoteAddr = rip
+				}
+			}
+			next.ServeHTTP(w, r)
+		}
+		return http.HandlerFunc(fn)
+	}
+}
+
 func ClientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
