@@ -214,17 +214,22 @@ Claims токена: `sub` (UUID пользователя), `jti` (случай�
 
 ### Лимиты запросов
 
-| Переменная                 | По умолчанию | Окно применения                         |
-| -------------------------- | ------------ | --------------------------------------- |
-| `LOGIN_RATE_LIMIT`         | `10`         | 15 минут (IP+email) **и** 1 час (email) |
-| `REGISTER_RATE_LIMIT`      | `10`         | 1 час (IP)                              |
-| `REFRESH_RATE_LIMIT`       | `30`         | 1 минута (hash cookie / IP)             |
-| `LOGOUT_RATE_LIMIT`        | `10`         | 1 минута (IP)                           |
-| `AUTHENTICATED_RATE_LIMIT` | `600`        | 1 минута (user ID / IP)                 |
+| Переменная                 | По умолчанию | Окно применения                                   |
+| -------------------------- | ------------ | ------------------------------------------------- |
+| `LOGIN_RATE_LIMIT`         | `10`         | 15 минут (IP+email) **и** 1 час (email)           |
+| `REGISTER_RATE_LIMIT`      | `10`         | 1 час (IP)                                        |
+| `REFRESH_RATE_LIMIT`       | `30`         | 1 минута (hash cookie / IP)                       |
+| `LOGOUT_RATE_LIMIT`        | `10`         | 1 минута (IP)                                     |
+| `AUTHENTICATED_RATE_LIMIT` | `600`        | 1 минута (user ID / IP)                           |
+| `RATE_LIMIT_HMAC_KEY`      | —            | Ключ HMAC-SHA256 для хеширования PII в bucket_key |
 
-Значения меньше 1 или неразбираемые молча заменяются default (`intEnv`). 
+Значения меньше 1 или неразбираемые молча заменяются default (`intEnv`).
 
-Все окна - fixed window, пороги считаются **запросами**, а не «неудачными попытками».
+Все окна - fixed window. На `/login` пороги считаются по **неудачным** попыткам
+аутентификации: hit засчитывается только при ответе `401`, успешный вход (`2xx`)
+сбрасывает счётчик неудачных попыток (защита от account-lockout DoS). На
+остальных маршрутах пороги считаются по запросам. Подробности - в разделе
+«Разделение rate-limit политик» ниже и в таблице маршрутов (`rl:<policy>:v1:<hmac(...)>`).
 
 ## Запуск и управление сервисом
 
@@ -394,7 +399,7 @@ In-flight запросы дожидаются завершения, новые �
 
 Поэтому прокси обязан перезаписывать `X-Forwarded-For`/`X-Real-IP` и быть единственным источником входа. 
 
-Иначе ключи rate-limiting (`ip:...`, `login:<IP>:...`) можно подделать, а `ClientIP` вернет адрес прокси.
+Иначе ключи rate-limiting (`rl:<policy>:v1:<hmac(ip)>`, строятся от `ClientIP`) можно подделать чужим IP, а `ClientIP` вернет адрес прокси.
 
 Дополнительно включите `COOKIE_SECURE=true` (HTTPS) и добавьте публичный origin в `CORS_ORIGINS`.
 
@@ -444,13 +449,19 @@ In-flight запросы дожидаются завершения, новые �
 
 **api_rate_limits** (Создается и `init.sql`, и приложением при старте):
 
-- `bucket_key TEXT PK`;
+- `bucket_key TEXT PK` — формат `rl:<route_policy>:<version>:<hmac_sha256(id)>`
+  (например `rl:register:v1:...`, `rl:logout:v1:...`); IP/email/токены
+  хешируются HMAC-SHA256 с ключом `RATE_LIMIT_HMAC_KEY` — PII в открытом
+  виде в таблице не хранится;
 
-- `window_start TIMESTAMPTZ`;
+- `window_start TIMESTAMPTZ NOT NULL` — граница fixed-window;
 
 - `hits INTEGER CHECK (hits > 0)`, `updated_at`;
 
 - индекс `idx_api_rate_limits_updated`.
+
+Строки старого формата (`ip:<IP>`, `login:<IP>:<email>`) совместимы: новый код
+их не читает, фоновый сборщик удаляет их по истечении окна.
 
 Отдельной таблицы blacklist access-токенов нет: досрочный отзыв короткоживущего access-токена невозможен (см. [Эксплуатационные ограничения](#эксплуатационные-ограничения)).
 
@@ -848,7 +859,7 @@ Swagger UI грузится из интернета - в изолированн�
 
 - **Нет** отзыва access-токенов (stateless JWT, blacklist отсутствует).
 
-- **Нет** автоматического удаления строк `api_rate_limits` (таблица растет за счет новых ключей).
+- Строки `api_rate_limits` чистит фоновое задание очистки (`RATE_LIMIT_CLEANUP_INTERVAL`, `RATE_LIMIT_MAX_WINDOW_SECONDS`).
 
 #### Чек-лист перед продакшном:
 
@@ -877,29 +888,48 @@ openssl rand -hex 24 # значение ADMIN_REGISTER_TOKEN
 
 Атомарный `INSERT ... ON CONFLICT DO UPDATE` увеличивает `hits` или сбрасывает окно, если `window_start + window <= now()`.
 
-| Маршрут                          | Окно     | Порог (env)                      | Ключ счетчика                                        |
-| -------------------------------- | -------- | -------------------------------- | ---------------------------------------------------- |
-| `POST /api/v1/login` (limiter 1) | 15 минут | `LOGIN_RATE_LIMIT` (10)          | `login:<IP>:<email>`                                 |
-| `POST /api/v1/login` (limiter 2) | 1 час    | `LOGIN_RATE_LIMIT` (10)          | `login_global:<email>` / `login_global:invalid:<IP>` |
-| `POST /api/v1/register`          | 1 час    | `REGISTER_RATE_LIMIT` (10)       | `ip:<IP>`                                            |
-| `POST /api/v1/register-admin`    | 1 час    | `REGISTER_RATE_LIMIT` (10)       | `ip:<IP>`                                            |
-| `POST /api/v1/refresh`           | 1 минута | `REFRESH_RATE_LIMIT` (30)        | `refresh:<base64(SHA-256 cookie)>` / `refresh:<IP>`  |
-| `POST /api/v1/logout`            | 1 минута | `LOGOUT_RATE_LIMIT` (10)         | `ip:<IP>`                                            |
-| защищенные `/api/v1/users*`      | 1 минута | `AUTHENTICATED_RATE_LIMIT` (600) | `user:<UUID>` / `ip:<IP>`                            |
+| Маршрут                          | Окно     | Порог (env)                      | Политика / ключ счетчика                                          |
+| -------------------------------- | -------- | -------------------------------- | ------------------------------------------------------------------ |
+| `POST /api/v1/login` (limiter 1) | 15 минут | `LOGIN_RATE_LIMIT` (10)          | `rl:login_ip:v1:<hmac(IP\|email)>` — только при 401                |
+| `POST /api/v1/login` (limiter 2) | 1 час    | `LOGIN_RATE_LIMIT` (10)          | `rl:login_account:v1:<hmac(email)>` — только при 401               |
+| `POST /api/v1/login` (счётчик)   | 15 минут | `LOGIN_RATE_LIMIT` (10)          | `rl:login_failed:v1:<hmac(IP\|email)>` — hit только при 401, сброс при 2xx |
+| `POST /api/v1/register`          | 1 час    | `REGISTER_RATE_LIMIT` (10)       | `rl:register:v1:<hmac(IP)>`                                        |
+| `POST /api/v1/register-admin`    | 1 час    | `REGISTER_RATE_LIMIT` (10)       | `rl:register:v1:<hmac(IP)>`                                        |
+| `POST /api/v1/refresh`           | 1 минута | `REFRESH_RATE_LIMIT` (30)        | `rl:refresh:v1:<hmac(sha256(token))>` / `rl:refresh:v1:<hmac(ip)>` |
+| `POST /api/v1/logout`            | 1 минута | `LOGOUT_RATE_LIMIT` (10)         | `rl:logout:v1:<hmac(IP)>`                                          |
+| защищенные `/api/v1/users*`      | 1 минута | `AUTHENTICATED_RATE_LIMIT` (600) | `rl:authenticated:v1:<hmac(user-id)>` / `<hmac(IP)>`               |
+
+Канонический формат ключа — `rl:<route_policy>:<version>:<hmac_sha256(id)>`
+(HMAC-SHA256 с отдельным ключом `RATE_LIMIT_HMAC_KEY`, base64url без padding).
+IP и email **никогда не хранятся в открытом виде** в таблице `api_rate_limits`
+(защита PII). Разные политики — независимые бакеты: 100 запросов на
+`/register` с одного IP не затрагивают `/logout` или `/login` того же IP.
+Строки старого формата (`ip:<IP>`, `login:<IP>:<email>`) устарели — новый код
+их не читает; фоновый сборщик удаляет их по истечении окна.
 
 Особенности реализации, о которых нужно знать:
 
-- Пороги считаются **запросами**, а не неудачными попытками: счетчик увеличивается и на успешный вход. Реализация **не эквивалентна** политике «10 неуспешных попыток за 15 минут».
+- Логин считается **только по неудачным попыткам**: hit политикам
+  `login_ip` / `login_account` / `login_failed` засчитывается лишь когда
+  обработчик вернул `401` (неверные учётные данные); успешный вход (`2xx`)
+  **сбрасывает** счётчик неудач — легитимного пользователя нельзя
+  заблокировать накопленными ошибками (защита от Account-Lockout DoS).
+  Успешные ответы других маршрутов hit'ы не тратят (атомарный decrement).
 
-- Логин закрыт двумя последовательными окнами; сработает то, которое переполнится первым.
-
-- Email для ключа извлекается из JSON-тела (не более 1 MiB); тело сохраняется для обработчика.
+- Email для ключа извлекается из JSON-тела (не более 1 MiB); тело сохраняется для обработчика. В ключ попадает только HMAC-дайджест.
 
 - При недоступном хранилище, нулевом пороге или некорректном окне middleware отвечает `503 SERVICE_UNAVAILABLE` (fail-closed), а не пропускает запрос.
 
-- Превышение → `429 RATE_LIMITED` с `Retry-After` в секундах (длительность окна).
+- Превышение → `429 RATE_LIMITED` с `Retry-After` в секундах — **оставшееся
+  время до сброса конкретного окна** бакета (не вся его длина).
 
-- Строки таблицы не удаляются автоматически; периодическую очистку устаревших бакетов нужно добавлять отдельным заданием.
+- Строки таблицы чистит фоновое задание (`RATE_LIMIT_CLEANUP_INTERVAL`,
+  `RATE_LIMIT_MAX_WINDOW_SECONDS`).
+
+- `RATE_LIMIT_HMAC_KEY` — обязательный в production env (≥32 символа, fail-fast
+  в `Validate()`): отдельный секрет для хеширования PII в ключах лимитеров;
+  вне production при отсутствии выводится детерминированно из `JWT_SECRET`
+  (доменный разделитель `synapse-rate-limit-hmac-key-v1`).
 
 Локальная проверка (требует PostgreSQL):
 
@@ -1000,7 +1030,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`): push и pull request на `main
 
 - **`GET /health` не проверяет PostgreSQL.** Контейнер может оставаться `healthy` при падении БД.
 
-- **Пороги лимитов считаются запросами**, включая успешные; при высокой плотности NAT-клиентов ключ `ip:<IP>` для регистрации может приводить к ложным `429`.
+- **На публичных маршрутах (register/logout/refresh/authenticated) пороги считаются запросами**; на `/login` — только неудачными попытками (`401`, сброс при `2xx`). При высокой плотности NAT-клиентов hmac(IP)-ключ политики `register` может приводить к ложным `429`.
 
 - **`chimw.RealIP` доверяет `X-Forwarded-For` без настроек** - при прямом (не через доверяемый прокси) доступе ключи лимитов подделываемы.
   

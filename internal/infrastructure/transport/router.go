@@ -67,18 +67,33 @@ func New(cfg *config.Config, authUC usecase.AuthUseCase, userUC usecase.UserUseC
 		r.With(middleware.RequireAllowedOrigin(cfg)).Get("/csrf", authH.CSRFToken)
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.CSRF(cfg))
-			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register", authH.Register)
-			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.IPKey)).Post("/register-admin", authH.RegisterAdmin)
-			r.With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey)).
-				With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, time.Hour, middleware.AccountGlobalKey)).
+			// Разделение rate-limit по политикам маршрутов (защита от
+			// Account-Lockout DoS): каждый маршрут получает собственный
+			// bucket rl:<route_policy>:v1:<hmac(...)>, поэтому исчерпание
+			// лимита на /register никогда не блокирует /logout того же IP.
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.RegisterKey(cfg))).Post("/register", authH.Register)
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RegisterRateLimit, time.Hour, middleware.RegisterKey(cfg))).Post("/register-admin", authH.RegisterAdmin)
+			// POST /login — три независимые политики:
+			//  1. login_failed: учитываются ТОЛЬКО неудачные аутентификации
+			//     (ответ 401); успешный вход (2xx) сбрасывает счётчик —
+			//     легитимного пользователя нельзя заблокировать ошибками;
+			//  2. login_ip: per-IP+email бюджет расходуется только при 401
+			//     (OnFailedStatus делает decrement для остальных исходов);
+			//  3. login_account: глобальный анти-брутфорс по email
+			//     (независим от IP; email — только как HMAC-дайджест).
+			r.With(middleware.LoginFailureCounter(rateLimitStore, cfg.LoginRateLimit, 15*time.Minute, middleware.LoginFailedKey(cfg))).
+				With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, 15*time.Minute, middleware.AccountIPKey(cfg),
+					middleware.OnFailedStatus(nil, http.StatusUnauthorized))).
+				With(middleware.RateLimit(rateLimitStore, cfg.LoginRateLimit, time.Hour, middleware.AccountGlobalKey(cfg),
+					middleware.OnFailedStatus(nil, http.StatusUnauthorized))).
 				Post("/login", authH.Login)
-			r.With(middleware.RateLimit(rateLimitStore, cfg.RefreshRateLimit, time.Minute, middleware.RefreshKey)).Post("/refresh", authH.Refresh)
-			r.With(middleware.RateLimit(rateLimitStore, cfg.LogoutRateLimit, time.Minute, middleware.IPKey)).
+			r.With(middleware.RateLimit(rateLimitStore, cfg.RefreshRateLimit, time.Minute, middleware.RefreshKey(cfg))).Post("/refresh", authH.Refresh)
+			r.With(middleware.RateLimit(rateLimitStore, cfg.LogoutRateLimit, time.Minute, middleware.LogoutKey(cfg))).
 				Post("/logout", authH.Logout)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Authenticate(cfg, last))
-				r.Use(middleware.RateLimit(rateLimitStore, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey))
+				r.Use(middleware.RateLimit(rateLimitStore, cfg.AuthenticatedRateLimit, time.Minute, middleware.UserKey(cfg)))
 				r.With(middleware.RequireUserOrAdmin).Get("/users/me", userH.Me)
 				r.With(middleware.RequireUserOrAdmin).Put("/users/me", userH.PutMe)
 				r.With(middleware.RequireUserOrAdmin).Patch("/users/me", userH.PatchMe)

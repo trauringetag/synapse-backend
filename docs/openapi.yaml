@@ -63,25 +63,35 @@ info:
     - Rate limiting хранится в PostgreSQL (`api_rate_limits`), fixed window, fail-closed:
       ошибка хранилища дает `503 SERVICE_UNAVAILABLE` («Проверка авторизации временно недоступна»),
       превышение — `429 RATE_LIMITED` («Слишком много запросов») с заголовком `Retry-After`
-      (длительность окна в секундах).
+      (оставшееся время до сброса окна в секундах, а не вся длина окна).
+    - Каждый маршрут использует изолированную rate-limit политику; ключи в БД имеют формат
+      `rl:<route_policy>:<version>:<hmac_sha256(id)>` (например `rl:register:v1:...` и
+      `rl:logout:v1:...` не влияют друг на друга). IP и email никогда не хранятся в открытом
+      виде — они хешируются HMAC-SHA256 с отдельным ключом `RATE_LIMIT_HMAC_KEY`.
 
     ## Таблица лимитов и ключей счетчиков (по факту router.go)
 
-    | Маршрут | Окно | Порог (env) | Ключ счетчика |
-    | --- | --- | --- | --- |
-    | `POST /api/v1/login` (1-й limiter) | 15 минут | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login:<IP>:<нормализованный email>` |
-    | `POST /api/v1/login` (2-й limiter) | 1 час | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `login_global:<email>` либо `login_global:invalid:<IP>` |
-    | `POST /api/v1/register` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
-    | `POST /api/v1/register-admin` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
-    | `POST /api/v1/refresh` | 1 минута | `REFRESH_RATE_LIMIT`, по умолчанию 30 | `refresh:<SHA-256 cookie>` либо `refresh:<IP>` |
-    | `POST /api/v1/logout` | 1 минута | `LOGOUT_RATE_LIMIT`, по умолчанию 10 | `ip:<IP>` |
-    | защищенные `/api/v1/users*` | 1 минута | `AUTHENTICATED_RATE_LIMIT`, по умолчанию 600 | `user:<UUID>` либо `ip:<IP>` |
+    | Маршрут | Политика | Окно | Порог (env) | Ключ счетчика |
+    | --- | --- | --- | --- | --- |
+    | `POST /api/v1/login` (счётчик неудач) | `login_failed` | 15 минут | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `rl:login_failed:v1:<hmac(IP\|email)>` — hit только при 401, сброс при 2xx |
+    | `POST /api/v1/login` (1-й limiter) | `login_ip` | 15 минут | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `rl:login_ip:v1:<hmac(IP\|email)>` — hit только при 401 |
+    | `POST /api/v1/login` (2-й limiter) | `login_account` | 1 час | `LOGIN_RATE_LIMIT`, по умолчанию 10 | `rl:login_account:v1:<hmac(email)>` (при нераспознанном email — `<hmac(IP)>`) — hit только при 401 |
+    | `POST /api/v1/register` | `register` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `rl:register:v1:<hmac(IP)>` |
+    | `POST /api/v1/register-admin` | `register` | 1 час | `REGISTER_RATE_LIMIT`, по умолчанию 10 | `rl:register:v1:<hmac(IP)>` |
+    | `POST /api/v1/refresh` | `refresh` | 1 минута | `REFRESH_RATE_LIMIT`, по умолчанию 30 | `rl:refresh:v1:<hmac(sha256(cookie))>` либо `rl:refresh:v1:<hmac(ip)>` |
+    | `POST /api/v1/logout` | `logout` | 1 минута | `LOGOUT_RATE_LIMIT`, по умолчанию 10 | `rl:logout:v1:<hmac(IP)>` |
+    | защищенные `/api/v1/users*` | `authenticated` | 1 минута | `AUTHENTICATED_RATE_LIMIT`, по умолчанию 600 | `rl:authenticated:v1:<hmac(user-id)>` либо `<hmac(IP)>` |
 
-    Логин защищен **двумя** последовательными фиксированными окнами: 10 запросов за
-    15 минут на пару IP+email и 10 запросов за 1 час на email (при нераспознанном email —
-    на IP). Счетчики увеличиваются на **каждом** запросе, включая успешный вход, поэтому
-    реализация не эквивалентна политике «10 неуспешных попыток». Email извлекается из тела
-    запроса (до 1 MiB); IP берется из `RemoteAddr` после `chimw.RealIP`, при размещении за
+    Логин защищен **двумя** последовательными фиксированными окнами (IP+email за 15 минут
+    и email за час) плюс независимым счётчиком неудачных попыток. Счетчики на `/login`
+    увеличиваются **только при неудачной аутентификации** (`401`): успешный вход (`2xx`)
+    сбрасывает окно, другие исходы (`400`/`403`/`423`/`5xx`) возвращают засчитанный hit
+    обратно (decrement). Это защищает от account-lockout DoS: злоумышленник не может
+    заблокировать жертву, исчерпав лимит неверными паролями. Политики `/register` и
+    `/logout` полностью изолированы (разные префиксы ключей), поэтому 100 неудачных
+    попыток регистрации с одного IP не блокируют logout того же IP. Email извлекается из
+    тела запроса (до 1 MiB) и используется только как вход HMAC — в открытом виде в БД не
+    сохраняется; IP берется из `RemoteAddr` после `chimw.RealIP`, при размещении за
     reverse proxy доверие к `X-Forwarded-For` определяется конфигурацией прокси.
 
     ## Известные особенности реализации
@@ -484,7 +494,7 @@ components:
         type: string
         example: no-store, no-cache, must-revalidate, private
     RetryAfter:
-      description: Длительность текущего окна лимитера в секундах (например `900`, `3600`, `60`).
+      description: Оставшееся время до сброса текущего окна лимитера в секундах (например `137`, `52`, `1`; минимум 1).
       schema:
         type: integer
   parameters:
@@ -673,7 +683,7 @@ components:
     RateLimited:
       description: |
         `429 RATE_LIMITED` — превышен порог fixed-window лимитера («Слишком много запросов»),
-        `Retry-After` равен длительности окна в секундах.
+        `Retry-After` равен оставшемуся времени до сброса окна в секундах.
       headers:
         Retry-After:
           $ref: '#/components/headers/RetryAfter'

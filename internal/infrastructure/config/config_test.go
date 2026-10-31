@@ -15,6 +15,7 @@ func baseProdConfig() Config {
 		// fail-fast проверку; AppEnv — историческое имя сервиса.
 		Environment:        "production",
 		JWTSecret:          []byte(strings.Repeat("a", 48)), // сильный, не дефолтный
+		RateLimitHMACKey:   []byte(strings.Repeat("r", 48)), // отдельный секрет для HMAC PII
 		AdminRegisterToken: strings.Repeat("t", 32),         // не дефолтный/плейсхолдер
 		CookieSecure:       true,
 		DatabaseURL:        "postgres://u:p@db.internal:5432/synapse?sslmode=require",
@@ -22,9 +23,26 @@ func baseProdConfig() Config {
 }
 
 func TestValidate_ProductionSafeDefaultsPass(t *testing.T) {
+	t.Setenv("RATE_LIMIT_HMAC_KEY", strings.Repeat("r", 48))
 	cfg := baseProdConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("валидный production-конфиг не должен падать, got: %v", err)
+	}
+}
+
+func TestValidate_ProductionRejectsMissingRateLimitHMACKey(t *testing.T) {
+	// В production обязателен ЯВНЫЙ отдельный секрет RATE_LIMIT_HMAC_KEY:
+	// детерминированный вывод из JWT_SECRET допустим только вне production.
+	cfg := baseProdConfig() // поле заполнено, но env не задан
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "RATE_LIMIT_HMAC_KEY") {
+		t.Fatalf("production без env RATE_LIMIT_HMAC_KEY обязан падать, got: %v", err)
+	}
+
+	// Короткий (<32 символов) env тоже отбраковывается.
+	t.Setenv("RATE_LIMIT_HMAC_KEY", "short-key")
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "RATE_LIMIT_HMAC_KEY") {
+		t.Fatalf("короткий RATE_LIMIT_HMAC_KEY в production обязан падать, got: %v", err)
 	}
 }
 

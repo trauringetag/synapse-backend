@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"os"
@@ -46,7 +48,21 @@ type Config struct {
 	// в секундах (RATE_LIMIT_MAX_WINDOW_SECONDS, по умолчанию 3600 — 1 час для
 	// регистрации). Записи старше window_start + maxWindow удаляются.
 	RateLimitMaxWindowSeconds int
+	// RateLimitHMACKey — отдельный ключ (RATE_LIMIT_HMAC_KEY) для HMAC-SHA256
+	// хеширования PII (email/IP) в ключах таблицы api_rate_limits. Email и IP
+	// никогда не хранятся в открытом виде: bucket_key =
+	// rl:<route_policy>:<version>:<hmac(...)> (защита от Account-Lockout DoS и
+	// разделение rate-limit между маршрутами). В production обязателен; вне
+	// production при отсутствии выводится детерминированно из JWT_SECRET
+	// (доменный разделитель "synapse-rate-limit-hmac-key-v1"), чтобы ключ
+	// лимитеров никогда не был тем же самым секретом, что и JWT/CSRF.
+	RateLimitHMACKey []byte
 }
+
+// rateLimitHMACKeyDomain — доменный разделитель HKDF-подобного вывода
+// RateLimitHMACKey из JWT_SECRET (используется только когда отдельный ключ
+// не задан в конфигурации окружения).
+const rateLimitHMACKeyDomain = "synapse-rate-limit-hmac-key-v1"
 
 // SEC-03: дефолтные/небезопасные значения, которые запрещены в production.
 // Совпадение с любым из них (или префикс CHANGE_ME_*) — fail-fast при запуске.
@@ -142,6 +158,18 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// Отдельный ключ HMAC для хеширования PII в ключах rate-limit. Если не
+	// задан — выводится детерминированно из JWT_SECRET с доменным
+	// разделителем (HMAC(key=JWT_SECRET, msg=domain)), а НЕ используется как
+	// есть: секреты разных назначений не пересекются. В production явный
+	// RATE_LIMIT_HMAC_KEY обязателен (см. Validate).
+	hmacKey := []byte(env("RATE_LIMIT_HMAC_KEY", ""))
+	if len(hmacKey) == 0 && secret != DefaultJWTSecret {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(rateLimitHMACKeyDomain))
+		hmacKey = mac.Sum(nil)
+	}
+
 	cfg := &Config{
 		AppPort:                   env("APP_PORT", "8080"),
 		AppEnv:                    env("APP_ENV", "synapse-backend"),
@@ -164,6 +192,7 @@ func Load() (*Config, error) {
 		AuthenticatedRateLimit:    intEnv("AUTHENTICATED_RATE_LIMIT", 600),
 		RateLimitCleanupInterval:  cleanupInterval,
 		RateLimitMaxWindowSeconds: intEnv("RATE_LIMIT_MAX_WINDOW_SECONDS", 3600),
+		RateLimitHMACKey:          hmacKey,
 	}
 
 	// Fail-fast (SEC-03): в production запуск с дефолтными/небезопасными
@@ -228,6 +257,14 @@ func (c *Config) Validate() error {
 	}
 	if strings.Contains(strings.ToLower(c.DatabaseURL), "sslmode=disable") {
 		problems = append(problems, "DATABASE_URL содержит sslmode=disable — в production обязано TLS-соединение с PostgreSQL")
+	}
+	// Production: отдельный ключ HMAC для rate-limit обязателен и должен быть
+	// достаточно длинным; вывод из JWT_SECRET допустим только вне production.
+	// Проверяем явно заданный env (RATE_LIMIT_HMAC_KEY): Load кладёт в поле
+	// выведенный из JWT_SECRET ключ, который сам по себе не считается
+	// "отдельным секретом" для production.
+	if len(env("RATE_LIMIT_HMAC_KEY", "")) < 32 {
+		problems = append(problems, "RATE_LIMIT_HMAC_KEY не задан или короче 32 символов — в production обязателен отдельный секрет для хеширования PII в ключах api_rate_limits")
 	}
 
 	if len(problems) > 0 {

@@ -24,10 +24,11 @@ import (
 
 func platformTestConfig() *config.Config {
 	return &config.Config{
-		JWTSecret:   []byte("test-secret-key-at-least-32-bytes-long"),
-		AccessTTL:   15 * time.Minute,
-		RefreshTTL:  168 * time.Hour,
-		CORSOrigins: []string{"https://app.example.com"},
+		JWTSecret:        []byte("test-secret-key-at-least-32-bytes-long"),
+		AccessTTL:        15 * time.Minute,
+		RefreshTTL:       168 * time.Hour,
+		CORSOrigins:      []string{"https://app.example.com"},
+		RateLimitHMACKey: []byte("test-rate-limit-hmac-key-at-least-32-byt"),
 	}
 }
 
@@ -498,29 +499,33 @@ func TestRequireOrigin_Cookie_PlatformMobile_StillChecksOrigin(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRefreshKey_BearerAndCookie(t *testing.T) {
+	cfg := platformTestConfig()
+	refreshKey := RefreshKey(cfg)
+
 	// Без cookie ключ не должен ломаться (падает на IP) и не должен
-	// раскрывать значение токена.
+	// раскрывать значение токена. Ключ проходит через HMAC политики refresh:
+	// формат rl:refresh:v1:<hmac(...)>, значения токена в ключе нет.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 	req.Header.Set("Authorization", "Bearer refresh.jwt.value")
-	key := RefreshKey(req)
-	if !strings.HasPrefix(key, "refresh:") {
-		t.Errorf("RefreshKey(Bearer) = %q, ожидается префикс refresh:", key)
+	key := refreshKey(req)
+	if !strings.HasPrefix(key, "rl:refresh:v1:") {
+		t.Errorf("RefreshKey(Bearer) = %q, ожидается префикс rl:refresh:v1:", key)
 	}
 	if strings.Contains(key, "refresh.jwt.value") {
 		t.Error("RefreshKey не должен содержать значение токена")
 	}
 
-	// Одинаковый Bearer -> одинаковый ключ (детерминированный хеш).
+	// Одинаковый Bearer -> одинаковый ключ (детерминированный HMAC).
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 	req2.Header.Set("Authorization", "Bearer refresh.jwt.value")
-	if RefreshKey(req2) != key {
+	if refreshKey(req2) != key {
 		t.Error("Одинаковые Bearer-токены должны давать одинаковый ключ")
 	}
 
 	// Разные токены -> разные ключи.
 	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 	req3.Header.Set("Authorization", "Bearer other.refresh.jwt")
-	if RefreshKey(req3) == key {
+	if refreshKey(req3) == key {
 		t.Error("Разные токены должны давать разные ключи")
 	}
 
@@ -528,13 +533,13 @@ func TestRefreshKey_BearerAndCookie(t *testing.T) {
 	// Bearer (носитель не важен — важен сам токен).
 	req4 := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 	req4.AddCookie(&http.Cookie{Name: "refresh_token", Value: "refresh.jwt.value"})
-	if RefreshKey(req4) != key {
+	if refreshKey(req4) != key {
 		t.Error("Cookie и Bearer с одинаковым токеном должны давать одинаковый ключ")
 	}
 
 	// Ни Bearer, ни cookie -> fallback на IP (лимитер не ломается).
 	req5 := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
-	if k := RefreshKey(req5); !strings.HasPrefix(k, "refresh:") {
-		t.Errorf("Fallback-ключ = %q, ожидается префикс refresh:", k)
+	if k := refreshKey(req5); !strings.HasPrefix(k, "rl:refresh:v1:") {
+		t.Errorf("Fallback-ключ = %q, ожидается префикс rl:refresh:v1:", k)
 	}
 }

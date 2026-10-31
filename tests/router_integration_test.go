@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,17 +48,80 @@ type testEnv struct {
 // fakeRateLimiter — in-memory реализация domain.RateLimitStore с очень
 // высокими лимитами: в интеграционных тестах нас интересует бизнес-логика,
 // а не сами счётчики (работа RefreshKey покрыта unit-тестами middleware).
+// fixedResetAt — режим для unit-проверок Retry-After: ResetAt задаётся
+// явно через setResetAt (фиктивное «закрытое» окно), иначе reset считается
+// как windowStart+window (фиксированное окно, как в БД).
 type fakeRateLimiter struct {
-	hits map[string]int
+	mu           sync.Mutex
+	hits         map[string]int
+	windowStart  map[string]time.Time // момент открытия окна по ключу (для ResetAt как в БД)
+	resets       map[string]int       // число вызовов Reset по ключу (для проверок anti-lockout)
+	windowD      time.Duration
+	fixedResetAt *time.Time
 }
 
 func newFakeRateLimiter() *fakeRateLimiter {
-	return &fakeRateLimiter{hits: map[string]int{}}
+	return &fakeRateLimiter{hits: map[string]int{}, windowStart: map[string]time.Time{}, resets: map[string]int{}}
 }
 
-func (f *fakeRateLimiter) Increment(_ context.Context, key string, _ time.Duration) (int, error) {
+// setResetAt переключает хранилище в режим фиксированного момента сброса
+// окна (для детерминированных проверок заголовка Retry-After).
+func (f *fakeRateLimiter) setResetAt(t time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fixedResetAt = &t
+}
+
+func (f *fakeRateLimiter) Increment(_ context.Context, key string, window time.Duration) (domain.RateLimitResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, known := f.windowStart[key]
+	if !known {
+		f.windowStart[key] = time.Now()
+	}
 	f.hits[key]++
-	return f.hits[key], nil
+	f.windowD = window
+	resetAt := f.windowStart[key].Add(window)
+	if f.fixedResetAt != nil {
+		resetAt = *f.fixedResetAt
+	}
+	return domain.RateLimitResult{Count: f.hits[key], ResetAt: resetAt}, nil
+}
+
+// Reset обнуляет счётчик ключа (политика login_failed: успешный вход).
+func (f *fakeRateLimiter) Reset(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.hits, key)
+	delete(f.windowStart, key)
+	f.resets[key]++
+	return nil
+}
+
+// count возвращает текущее значение счётчика ключа (0 если окна нет).
+func (f *fakeRateLimiter) count(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hits[key]
+}
+
+// snapshot возвращает копию всех bucket-ключей с ненулевым счётчиком — для
+// проверок изоляции политик и отсутствия PII в хранилище.
+func (f *fakeRateLimiter) snapshot() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]int, len(f.hits))
+	for k, v := range f.hits {
+		out[k] = v
+	}
+	return out
+}
+
+// resetCalls возвращает число сбросов ключа.
+func (f *fakeRateLimiter) resetCalls(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resets[key]
 }
 
 func (f *fakeRateLimiter) Cleanup(_ context.Context, _ time.Duration) error { return nil }
@@ -69,6 +133,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg := &config.Config{
 		AppEnv:                 "synapse-test",
 		JWTSecret:              []byte("integration-test-secret-at-least-32-bytes"),
+		RateLimitHMACKey:       []byte("integration-test-rate-limit-hmac-key-32b!"),
 		AccessTTL:              15 * time.Minute,
 		RefreshTTL:             168 * time.Hour,
 		AdminRegisterToken:     "admin-token-123",
@@ -82,6 +147,13 @@ func newTestEnv(t *testing.T) *testEnv {
 		LogoutRateLimit:        1000,
 		AuthenticatedRateLimit: 1000,
 	}
+	return buildTestEnv(t, cfg)
+}
+
+// buildTestEnv собирает реальный роутер поверх in-memory моков с переданной
+// конфигурацией (пороги лимитов можно варьировать в тестах политик).
+func buildTestEnv(t *testing.T, cfg *config.Config) *testEnv {
+	t.Helper()
 	store := newMockStore()
 	limits := newFakeRateLimiter()
 

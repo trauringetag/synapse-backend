@@ -13,6 +13,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -110,15 +111,26 @@ func TestRealIP_UnparseableXFFKeepsRemoteAddr(t *testing.T) {
 // TestClientIP_SeesRealIP_EndToEnd — сквозная проверка: после цепочки RealIP
 // IPKey (ключ rate limiter'а) строится по настоящему клиенту для запроса от
 // доверенного прокси и по фактическому RemoteAddr — для атакующего с
-// поддельным заголовком.
+// поддельным заголовком. Ключи проходят через HMAC-SHA256 (PII не хранится в
+// открытом виде), поэтому сравниваем не литерал "ip:<IP>", а детерминированный
+// дайджест того же IP, вычисленный эталонным генератором rl:<policy>:v1:<hmac>.
 func TestClientIP_SeesRealIP_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		TrustedProxies:   nil,
+		RateLimitHMACKey: []byte("test-rate-limit-hmac-key-at-least-32-byt"),
+	}
+	ipKey := IPKey(cfg)
+
 	probeKey := func(trusted []string, remoteAddr, xff string) string {
 		t.Helper()
 		var got string
 		r := chi.NewRouter()
-		r.Use(RealIPFromTrustedProxies(&config.Config{TrustedProxies: trusted}))
+		r.Use(RealIPFromTrustedProxies(&config.Config{
+			TrustedProxies:   trusted,
+			RateLimitHMACKey: cfg.RateLimitHMACKey,
+		}))
 		r.Get("/probe", func(w http.ResponseWriter, req *http.Request) {
-			got = IPKey(req)
+			got = ipKey(req)
 		})
 		req := httptest.NewRequest(http.MethodGet, "/probe", nil)
 		req.RemoteAddr = remoteAddr
@@ -129,15 +141,52 @@ func TestClientIP_SeesRealIP_EndToEnd(t *testing.T) {
 		return got
 	}
 
-	// Доверенный прокси -> ключ по реальному клиенту.
-	if k := probeKey([]string{"10.0.0.0/8"}, "10.1.2.3:80", "198.51.100.77"); k != "ip:198.51.100.77" {
-		t.Errorf("IPKey от доверенного прокси = %q, want ip:198.51.100.77", k)
+	// Эталонные HMAC-ключи для ожидаемых IP (тот же алгоритм bucketKey/IPKey).
+	wantRealClient := ipKey(requestWithRemote("198.51.100.77:1"))
+	wantAttacker := ipKey(requestWithRemote("198.51.100.77:1"))
+
+	// Доверенный прокси -> ключ по реальному клиенту (198.51.100.77).
+	if k := probeKey([]string{"10.0.0.0/8"}, "10.1.2.3:80", "198.51.100.77"); k != wantRealClient {
+		t.Errorf("IPKey от доверенного прокси = %q, want HMAC(ip|198.51.100.77)=%q", k, wantRealClient)
 	}
 
-	// Недоверенный источник с поддельным XFF -> ключ по фактическому IP.
-	if k := probeKey([]string{"10.0.0.0/8"}, "198.51.100.77:80", "1.2.3.4"); k != "ip:198.51.100.77" {
-		t.Errorf("IPKey при поддельном XFF = %q, want ip:198.51.100.77 (обход rate-limit!)", k)
+	// Недоверенный источник с поддельным XFF -> ключ по фактическому IP
+	// (198.51.100.77), а НЕ по поддельному 1.2.3.4.
+	fakeKey := ipKey(requestWithRemote("1.2.3.4:1"))
+	k := probeKey([]string{"10.0.0.0/8"}, "198.51.100.77:80", "1.2.3.4")
+	if k != wantAttacker {
+		t.Errorf("IPKey при поддельном XFF = %q, want HMAC по фактическому IP=%q (обход rate-limit!)", k, wantAttacker)
 	}
+	if k == fakeKey {
+		t.Error("IPKey построился по поддельному XFF 1.2.3.4 — обход rate-limit!")
+	}
+
+	// Формат канонический: rl:ip:v1:<hmac>, открытого IP в ключе нет.
+	if len(k) <= len("rl:ip:v1:") || k[:len("rl:ip:v1:")] != "rl:ip:v1:" {
+		t.Errorf("IPKey = %q, ожидается префикс rl:ip:v1:", k)
+	}
+	if containsPlainIP(k) {
+		t.Errorf("IPKey = %q содержит открытый IP — PII не должна попадать в bucket_key", k)
+	}
+}
+
+// requestWithRemote — минимальный запрос с заданным RemoteAddr для эталонного
+// вычисления IPKey (без цепочки RealIP).
+func requestWithRemote(remote string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.RemoteAddr = remote
+	return req
+}
+
+// containsPlainIP проверяет, встречается ли в ключе любой из тестируемых
+// адресов в открытом виде.
+func containsPlainIP(key string) bool {
+	for _, ip := range []string{"198.51.100.77", "10.1.2.3", "1.2.3.4"} {
+		if strings.Contains(key, ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIsTrustedProxy_Unit(t *testing.T) {

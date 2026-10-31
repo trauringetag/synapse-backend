@@ -208,9 +208,145 @@ func LimitBody(next http.Handler) http.Handler {
 // Инфраструктурная реализация — persistence.RateLimitRepository.
 type RateLimitStore = domain.RateLimitStore
 
+// rateBucketVersion — версия схемы ключей api_rate_limits. Формат bucket_key:
+//
+//	rl:<route_policy>:<version>:<hmac(идентификатор)>
+//
+// Смена версии (или политики) гарантированно разобщает старые и новые окна
+// в таблице: rl:register:v1:... и rl:logout:v1:... — независимые счётчики.
+const rateBucketVersion = "v1"
+
+// Политики маршрутов (route_policy). Каждая политика — отдельный bucket,
+// поэтому исчерпание лимита на одном маршруте никогда не блокирует другой
+// (в частности 100 попыток на /register не влияют на /logout того же IP).
+const (
+	PolicyRegister      = "register"
+	PolicyLoginIP       = "login_ip"
+	PolicyLoginAccount  = "login_account"
+	PolicyLoginFailed   = "login_failed"
+	PolicyRefresh       = "refresh"
+	PolicyLogout        = "logout"
+	PolicyAuthenticated = "authenticated"
+)
+
+// hmacID — HMAC-SHA256 от идентификатора отдельным ключом конфигурации
+// (RATE_LIMIT_HMAC_KEY). Результат — base64url без padding: email/IP никогда
+// не попадают в таблицу api_rate_limits в открытом виде (защита PII).
+func hmacID(key []byte, id string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(id))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// bucketKey собирает канонический ключ хранилища: rl:<policy>:<version>:<hash>.
+// Если ключ HMAC не настроен, используется fallback-префикс legacy:<policy>:
+// (уникален на уровне таблицы, но НЕ применяется в роутере — там всегда
+// требуется cfg.RateLimitHMACKey; fail-closed покрыт проверкой store/limit).
+func bucketKey(hmacKey []byte, policy, rawID string) string {
+	if len(hmacKey) == 0 {
+		return "legacy:" + policy + ":" + rawID
+	}
+	return "rl:" + policy + ":" + rateBucketVersion + ":" + hmacID(hmacKey, rawID)
+}
+
+// statusRecorder перехватывает код ответа, чтобы limiter c реакцией на
+// результат запроса (onOutcome) мог отличить неудачную аутентификацию (401)
+// от успешной (2xx). Реализует http.Flusher для совместимости со стримингом.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if r.status == 0 {
+		r.status = code
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// RateLimitOption — необязательное поведение лимитера (реакция на исход).
+type RateLimitOption func(*rateLimitConfig)
+
+type rateLimitConfig struct {
+	// onOutcome вызывается после обработки запроса с финальным HTTP-статусом.
+	// Возвращаемое действие указывает, что сделать со счётчиком этого ключа.
+	onOutcome func(status int) outcomeAction
+}
+
+type outcomeAction int
+
+const (
+	outcomeNone outcomeAction = iota
+	// outcomeReset — сбросить счётчик (успешный вход обнуляет ошибки входа).
+	outcomeReset
+	// outcomeRelease — вычесть засчитанный hit (неудачная попытка не должна
+	// потреблять общий per-IP бюджет, пока включён учёт только по ошибкам).
+	outcomeRelease
+)
+
+// OnFailedStatus — опция «учёт только по неудачам» для пред-фильтра запросов
+// (например, общий per-IP бюджет login_ip): засчитанный increment откатывается
+// (decrement/release), если финальный статус НЕ входит в список failed.
+// Типичный вызов: OnFailedStatus(http.StatusUnauthorized) — hit потребляется
+// только при 401 (неверные учётные данные); успешные (200), валидационные
+// (400) и запрещённые (403) ответы счётчик не тратят. Обратный вызов cb
+// (может быть nil) получает факт неудачи и статус — на нём роутер строит
+// составной ключ login_failed.
+func OnFailedStatus(cb func(failed bool, status int), failedStatuses ...int) RateLimitOption {
+	return func(c *rateLimitConfig) {
+		c.onOutcome = func(status int) outcomeAction {
+			failed := len(failedStatuses) == 0 // без списка: любой ответ считается неудачей
+			for _, s := range failedStatuses {
+				if status == s {
+					failed = true
+					break
+				}
+			}
+			if cb != nil {
+				cb(failed, status)
+			}
+			if !failed {
+				return outcomeRelease
+			}
+			return outcomeNone
+		}
+	}
+}
+
+// ResetOnSuccess — опция «сброс при успехе»: финальный статус 2xx удаляет
+// окно текущего ключа (успешный вход обнуляет счётчик неудачных попыток).
+func ResetOnSuccess() RateLimitOption {
+	return func(c *rateLimitConfig) {
+		c.onOutcome = func(status int) outcomeAction {
+			if status >= 200 && status < 300 {
+				return outcomeReset
+			}
+			return outcomeNone
+		}
+	}
+}
+
 // RateLimit возвращает middleware ограничения частоты запросов, использующий
 // переданный порт store.Increment для учёта попаданий в окне window.
-func RateLimit(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+//
+// Опции onOutcome позволяют строить политики «только неудачные попытки»:
+//   - decrement при не-неудачном статусе (OnFailedStatus) — лимит по IP/аккаунту
+//     тратится только на реальные промахи аутентификации;
+//   - reset при 2xx (ResetOnSuccess) — успешный вход обнуляет счётчик неудач.
+func RateLimit(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string, opts ...RateLimitOption) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if limit < 1 || window <= 0 || store == nil || keyFn == nil {
@@ -221,19 +357,115 @@ func RateLimit(store RateLimitStore, limit int, window time.Duration, keyFn func
 			if key == "" {
 				key = "unknown"
 			}
+			cfgRL := &rateLimitConfig{}
+			for _, o := range opts {
+				o(cfgRL)
+			}
 			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
-			count, err := store.Increment(ctx, key, window)
+			res, err := store.Increment(ctx, key, window)
 			if err != nil {
 				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
 				return
 			}
-			if count > limit {
-				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
+			if res.Count > limit {
+				// Retry-After = ОСТАВШЕЕСЯ время до сброса окна (секунды),
+				// а не вся длина окна: клиент узнаёт, когда именно откроется
+				// следующее фиксированное окно (reset_at). Минимум 1 секунда.
+				retry := int64(time.Until(res.ResetAt).Round(time.Second).Seconds())
+				if retry < 1 {
+					retry = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
 				response.Error(w, http.StatusTooManyRequests, "Слишком много запросов", nil)
 				return
 			}
-			next.ServeHTTP(w, r)
+			if cfgRL.onOutcome == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			rec := &statusRecorder{ResponseWriter: w}
+			next.ServeHTTP(rec, r)
+			switch cfgRL.onOutcome(rec.status) {
+			case outcomeReset:
+				sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer scancel()
+				_ = store.Reset(sctx, key)
+			case outcomeRelease:
+				sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer scancel()
+				// best-effort decrement засчитанного hit (см. releaseIncrement).
+				_ = releaseIncrement(sctx, store, key, window)
+			}
+		})
+	}
+}
+
+// releaseIncrement — «вычет» одного hit из текущего окна. Реализуется через
+// необязательный интерфейс с методом Release (его предоставляет
+// persistence.RateLimitRepository — атомарный UPDATE hits = hits - 1 с
+// удалением строки при достижении нуля). Если хранилище метода не
+// поддерживает, выполняется Reset ключа: консервативнее (окно обнуляется),
+// но для anti-lockout политик безопасно — счётчики ведутся только по
+// реальным попыткам/неудачам.
+func releaseIncrement(ctx context.Context, store RateLimitStore, key string, window time.Duration) error {
+	if rel, ok := store.(interface {
+		Release(ctx context.Context, key string, window time.Duration) error
+	}); ok {
+		return rel.Release(ctx, key, window)
+	}
+	return store.Reset(ctx, key)
+}
+
+// LoginFailureCounter — post-фильтр политики login_failed для POST /login:
+// увеличивает счётчик hmac(ip|email) ТОЛЬКО когда внутренний обработчик
+// вернул 401 (неверные учётные данные). Успешный вход (2xx) сбрасывает этот
+// счётчик полностью (ResetOnSuccess) — легитимного пользователя нельзя
+// заблокировать накопленными ранее ошибками (защита от account lockout DoS).
+// При превышении лимита неудач отвечает 429 + Retry-After (оставшееся до
+// сброса окна). Ошибки хранилища — fail-closed (503), как и RateLimit.
+func LoginFailureCounter(store RateLimitStore, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if limit < 1 || window <= 0 || store == nil || keyFn == nil {
+				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				return
+			}
+			key := keyFn(r)
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			res, err := store.Increment(ctx, key, window)
+			cancel()
+			if err != nil {
+				response.Error(w, http.StatusServiceUnavailable, messages.AuthenticationUnavailable, nil)
+				return
+			}
+			if res.Count > limit {
+				retry := int64(time.Until(res.ResetAt).Round(time.Second).Seconds())
+				if retry < 1 {
+					retry = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
+				response.Error(w, http.StatusTooManyRequests, "Слишком много запросов", nil)
+				return
+			}
+			rec := &statusRecorder{ResponseWriter: w}
+			next.ServeHTTP(rec, r)
+			switch {
+			case rec.status >= 200 && rec.status < 300:
+				// Успешная аутентификация: сброс счётчика неудач (decrement
+				// до нуля = удаление окна).
+				sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer scancel()
+				_ = store.Reset(sctx, key)
+			case rec.status == http.StatusUnauthorized:
+				// Неудачная аутентификация: hit остаётся засчитанным.
+			default:
+				// Любой другой исход (400/403/500...) не является промахом
+				// аутентификации — возвращаем засчитанный hit.
+				sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer scancel()
+				_ = releaseIncrement(sctx, store, key, window)
+			}
 		})
 	}
 }
@@ -383,29 +615,93 @@ func loginEmail(r *http.Request) string {
 	return strings.ToLower(strings.TrimSpace(body.Email))
 }
 
-func AccountIPKey(r *http.Request) string {
-	return "login:" + ClientIP(r) + ":" + loginEmail(r)
+// KeyPolicy — конфигурация генератора ключей rate-limit: отдельный HMAC-ключ
+// для хеширования PII (cfg.RateLimitHMACKey) и имя политики маршрута,
+// входящее в bucket_key. Разные политики => разные buckets даже при одинаковом
+// идентификаторе (IP/email): /register и /logout одного IP не пересекаются.
+type KeyPolicy struct {
+	HMACKey []byte
+	Policy  string
 }
 
-func IPKey(r *http.Request) string { return "ip:" + ClientIP(r) }
+// NewKeyPolicy создаёт генератор ключей для политики policy с ключом hmacKey.
+func NewKeyPolicy(hmacKey []byte, policy string) KeyPolicy {
+	return KeyPolicy{HMACKey: hmacKey, Policy: policy}
+}
+
+// Key возвращает bucket-ключ rl:<policy>:<version>:<hmac(rawID)> для сырого
+// идентификатора (IP, email, токен-хеш, user id). Пустой rawID допустим:
+// он также хешируется — в БД не попадает ничего, кроме HMAC-дайджеста.
+func (p KeyPolicy) Key(rawID string) string {
+	return bucketKey(p.HMACKey, p.Policy, rawID)
+}
+
+// AccountIPKey — ключ лимитера POST /login по связке IP+email (политика
+// login_ip). Email никогда не кладётся в ключ открытым текстом: он входит
+// только как входные данные HMAC-SHA256 (см. KeyPolicy).
+func AccountIPKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyLoginIP)
+	return func(r *http.Request) string {
+		return p.Key(ClientIP(r) + "|" + loginEmail(r))
+	}
+}
+
+// IPKey — общий per-IP ключ (историческое API): политика "ip", идентификатор
+// — IP, всё под HMAC. Маршруты login/register/logout применяют
+// специализированные политики ниже; IPKey покрыт тестами RealIP.
+func IPKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, "ip")
+	return func(r *http.Request) string { return p.Key(ClientIP(r)) }
+}
+
+// RegisterKey — изолированный per-IP лимит POST /register (политика register).
+// Не пересекается ни с /login, ни с /logout: 100 попыток регистрации с одного
+// IP исчерпывают только bucket rl:register:v1:<hmac(ip)>.
+func RegisterKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyRegister)
+	return func(r *http.Request) string { return p.Key(ClientIP(r)) }
+}
+
+// LogoutKey — изолированный per-IP лимит POST /logout (политика logout).
+func LogoutKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyLogout)
+	return func(r *http.Request) string { return p.Key(ClientIP(r)) }
+}
+
+// LoginFailedKey — ключ счётчика «только неудачные попытки» для POST /login
+// (политика login_failed): hmac(ip|email). Инкремент происходит ТОЛЬКО когда
+// внутренний обработчик вернул 401 (неверные учётные данные) — см.
+// LoginFailureCounter в router. Успешный вход сбрасывает этот счётчик
+// (ResetOnSuccess), поэтому легитимного пользователя нельзя заблокировать
+// накопленными ошибками (account lockout DoS).
+func LoginFailedKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyLoginFailed)
+	return func(r *http.Request) string {
+		return p.Key(ClientIP(r) + "|" + loginEmail(r))
+	}
+}
 
 // RefreshKey строит ключ rate limiter для POST /refresh одинаково для обоих
 // типов клиентов: хешируется (SHA-256, без значения токена в ключе/логах)
 // фактический носитель refresh-токена — Bearer-заголовок (мобильные/серверные
 // клиенты), иначе cookie refresh_token (веб). При отсутствии обоих используется
-// IP, чтобы лимитер не ломался (например, при токене только в JSON-теле).
-func RefreshKey(r *http.Request) string {
-	raw := bearerRefreshCredential(r)
-	if raw == "" {
-		if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
-			raw = c.Value
+// IP. Итог дополнительно проходит через HMAC политики refresh: в таблице —
+// только дайджест вида rl:refresh:v1:<hmac(...)>.
+func RefreshKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyRefresh)
+	return func(r *http.Request) string {
+		raw := bearerRefreshCredential(r)
+		if raw == "" {
+			if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
+				raw = c.Value
+			}
 		}
+		if raw == "" {
+			return p.Key("ip|" + ClientIP(r))
+		}
+		h := sha256.Sum256([]byte(raw))
+		return p.Key(base64.RawURLEncoding.EncodeToString(h[:]))
 	}
-	if raw == "" {
-		return "refresh:" + ClientIP(r)
-	}
-	h := sha256.Sum256([]byte(raw))
-	return "refresh:" + base64.RawURLEncoding.EncodeToString(h[:])
 }
 
 // bearerRefreshCredential возвращает refresh-токен из Authorization: Bearer ...
@@ -559,20 +855,34 @@ func validCSRF(secret []byte, token string) bool { return auth.ValidCSRF(secret,
 // middleware -> security -> middleware.
 func IssueCSRF(secret []byte) (string, error) { return auth.IssueCSRF(secret) }
 
-func AccountGlobalKey(r *http.Request) string {
-	email := loginEmail(r)
-	if email == "" {
-		return "login_global:invalid:" + ClientIP(r)
+// AccountGlobalKey — глобальный (независимый от IP) лимит на аккаунт по email
+// для POST /login (политика login_account). Защита от брутфорса одного
+// аккаунта с разных IP; email хранится только как HMAC-дайджест.
+func AccountGlobalKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyLoginAccount)
+	return func(r *http.Request) string {
+		email := loginEmail(r)
+		if email == "" {
+			// Невалидное/отсутствующее email: отдельный bucket на IP, чтобы
+			// мусорные запросы не сливались в один общий счётчик.
+			return p.Key("invalid|" + ClientIP(r))
+		}
+		return p.Key(email)
 	}
-	return "login_global:" + email
 }
 
-func UserKey(r *http.Request) string {
-	p, ok := FromContext(r.Context())
-	if !ok {
-		return IPKey(r)
+// UserKey — per-user лимит для аутентифицированных маршрутов (политика
+// authenticated); при отсутствии Principal — изолированный bucket на IP.
+func UserKey(cfg *config.Config) func(*http.Request) string {
+	p := NewKeyPolicy(cfg.RateLimitHMACKey, PolicyAuthenticated)
+	ip := NewKeyPolicy(cfg.RateLimitHMACKey, "ip")
+	return func(r *http.Request) string {
+		principal, ok := FromContext(r.Context())
+		if !ok {
+			return ip.Key(ClientIP(r))
+		}
+		return p.Key(principal.ID.String())
 	}
-	return "user:" + p.ID.String()
 }
 
 func SecurityHeaders(next http.Handler) http.Handler {

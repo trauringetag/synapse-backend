@@ -22,8 +22,12 @@ type mockRateLimitStore struct {
 	err      error // если задан, Cleanup возвращает эту ошибку
 }
 
-func (m *mockRateLimitStore) Increment(_ context.Context, _ string, _ time.Duration) (int, error) {
-	return 1, nil
+func (m *mockRateLimitStore) Increment(_ context.Context, _ string, window time.Duration) (domain.RateLimitResult, error) {
+	return domain.RateLimitResult{Count: 1, ResetAt: time.Now().Add(window)}, nil
+}
+
+func (m *mockRateLimitStore) Reset(_ context.Context, _ string) error {
+	return nil
 }
 
 func (m *mockRateLimitStore) Cleanup(_ context.Context, maxWindow time.Duration) error {

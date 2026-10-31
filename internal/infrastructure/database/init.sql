@@ -32,6 +32,19 @@ ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
 
 CREATE INDEX IF NOT EXISTS idx_users_role_status ON users (role, status);
 
+-- api_rate_limits — скользящее окно rate limiter'а (SEC: защита от
+-- Account-Lockout DoS и разделение лимитов между маршрутами).
+--
+-- Формат bucket_key: rl:<route_policy>:<version>:<hmac_sha256(id)>, например
+--   rl:register:v1:<hmac(ip)>      — POST /register (per-IP);
+--   rl:login_ip:v1:<hmac(ip|email)> / rl:login_failed:v1:... — POST /login
+--     (неудачные попытки считаются только при 401, успешный вход сбрасывает);
+--   rl:logout:v1:<hmac(ip)>        — POST /logout (изолирован от /register!).
+-- Идентификаторы (IP/email/токен) хешируются HMAC-SHA256 с отдельным ключом
+-- RATE_LIMIT_HMAC_KEY — в таблице НИКОГДА не хранится PII в открытом виде.
+-- Строки старого формата (ip:<IP>, login:<IP>:<email> без префикса rl:)
+-- устарели: новый код их не читает и не пишет; они удаляются сборщиком
+-- мусора (Cleanup) по истечении окна.
 CREATE TABLE
     IF NOT EXISTS api_rate_limits (
         bucket_key TEXT PRIMARY KEY,
@@ -41,3 +54,14 @@ CREATE TABLE
     );
 
 CREATE INDEX IF NOT EXISTS idx_api_rate_limits_updated ON api_rate_limits (updated_at);
+
+-- Идемпотентная миграция для баз, созданных до введения колонки updated_at и
+-- CHECK-ограничения (старые строки не конфликтуют: SELECT/DELETE фильтруют
+-- бакеты по точному ключу, а фоновый Cleanup удалит устаревшие записи).
+ALTER TABLE api_rate_limits
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW ();
+
+UPDATE api_rate_limits
+SET updated_at = window_start
+WHERE
+    updated_at IS NULL;

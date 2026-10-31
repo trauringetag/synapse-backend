@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -194,34 +195,53 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// testCfg — конфигурация для тестов генераторов ключей: с заданным
+// RATE_LIMIT_HMAC_KEY, чтобы bucket-ключи имели канонический вид
+// rl:<policy>:v1:<hmac(...)> и PII (IP/email) не попадали в него открытым текстом.
+var testCfg = &config.Config{RateLimitHMACKey: []byte("unit-test-rate-limit-hmac-key-32bytes!!")}
+
 // TestAccountIPKey тестирует формирование ключа для rate limiting по email и IP
 func TestAccountIPKey(t *testing.T) {
-	t.Run("Формирование ключа для защиты от брутфорса по аккаунту", func(t *testing.T) {
+	t.Run("Ключ политики login_ip: hmac, без открытого email/IP", func(t *testing.T) {
 		body := strings.NewReader(`{"email":"Test@Example.com"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/login", body)
 		req.RemoteAddr = "192.168.1.1:12345"
 
-		key := AccountIPKey(req)
+		key := AccountIPKey(testCfg)(req)
 
-		// Ключ должен содержать IP и нормализованный email
-		if !strings.Contains(key, "login:") {
-			t.Error("Ключ должен содержать префикс login")
+		// Канонический формат rl:<route_policy>:<version>:<hmac(ip|email)>
+		if !strings.HasPrefix(key, "rl:"+PolicyLoginIP+":"+rateBucketVersion+":") {
+			t.Errorf("Ключ должен иметь формат rl:login_ip:v1:<hmac>, получено: %q", key)
 		}
-		if !strings.Contains(key, "192.168.1.1") {
-			t.Error("Ключ должен содержать IP-адрес")
-		}
-		if !strings.Contains(key, "test@example.com") {
-			t.Error("Email должен быть приведен к нижнему регистру")
+		// PII не хранится в открытом виде: ни email, ни IP в ключе быть не должно.
+		if strings.Contains(key, "test@example.com") || strings.Contains(key, "192.168.1.1") {
+			t.Errorf("PII в открытом виде в ключе лимитера: %q", key)
 		}
 	})
 
-	t.Run("Обработка запроса без тела", func(t *testing.T) {
+	t.Run("Детерминированность: одинаковые ip+email дают одинаковый ключ", func(t *testing.T) {
+		mk := func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/login", strings.NewReader(`{"email":"A@B.com"}`))
+			r.RemoteAddr = "192.168.1.1:12345"
+			return r
+		}
+		k1 := AccountIPKey(testCfg)(mk())
+		k2 := AccountIPKey(testCfg)(mk())
+		if k1 != k2 {
+			t.Errorf("Один и тот же ip+email дал разные ключи: %q != %q", k1, k2)
+		}
+	})
+
+	t.Run("Запрос без тела всё равно даёт корректный hmac-ключ", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/login", nil)
 		req.RemoteAddr = "192.168.1.1:12345"
 
-		key := AccountIPKey(req)
-		if !strings.Contains(key, "login:192.168.1.1:") {
-			t.Errorf("Ключ должен содержать IP даже без тела: %v", key)
+		key := AccountIPKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:"+PolicyLoginIP+":"+rateBucketVersion+":") {
+			t.Errorf("Ключ должен содержать IP даже без тела (в виде hmac): %v", key)
+		}
+		if strings.Contains(key, "192.168.1.1") {
+			t.Errorf("IP не должен попадать в ключ открытым текстом: %v", key)
 		}
 	})
 }
@@ -232,9 +252,12 @@ func TestIPKey(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.RemoteAddr = "10.0.0.1:54321"
 
-		key := IPKey(req)
-		if !strings.HasPrefix(key, "ip:10.0.0.1") {
-			t.Errorf("Ключ должен начинаться с ip:10.0.0.1, получено: %v", key)
+		key := IPKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:ip:"+rateBucketVersion+":") {
+			t.Errorf("Ключ должен начинаться с rl:ip:%s, получено: %v", rateBucketVersion, key)
+		}
+		if strings.Contains(key, "10.0.0.1") {
+			t.Errorf("IP не должен храниться в открытом виде: %v", key)
 		}
 	})
 }
@@ -245,9 +268,12 @@ func TestRefreshKey(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: "test-refresh-token-123"})
 
-		key := RefreshKey(req)
-		if !strings.HasPrefix(key, "refresh:") {
-			t.Errorf("Ключ должен начинаться с refresh, получено: %v", key)
+		key := RefreshKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:"+PolicyRefresh+":"+rateBucketVersion+":") {
+			t.Errorf("Ключ должен начинаться с rl:refresh:%s, получено: %v", rateBucketVersion, key)
+		}
+		if strings.Contains(key, "test-refresh-token-123") {
+			t.Errorf("Значение токена не должно попадать в ключ: %v", key)
 		}
 	})
 
@@ -255,34 +281,40 @@ func TestRefreshKey(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
 		req.RemoteAddr = "192.168.1.1:12345"
 
-		key := RefreshKey(req)
-		if !strings.Contains(key, "192.168.1.1") {
-			t.Errorf("При отсутствии токена должен использоваться IP: %v", key)
+		key := RefreshKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:"+PolicyRefresh+":"+rateBucketVersion+":") {
+			t.Errorf("При отсутствии токена должен использоваться hmac(IP): %v", key)
+		}
+		if strings.Contains(key, "192.168.1.1") {
+			t.Errorf("IP не должен храниться в открытом виде: %v", key)
 		}
 	})
 }
 
 // TestUserKey тестирует формирование ключа для аутентифицированных пользователей
 func TestUserKey(t *testing.T) {
-	t.Run("Ключ формируется из ID аутентифицированного пользователя", func(t *testing.T) {
+	t.Run("Ключ формируется из hmac ID аутентифицированного пользователя", func(t *testing.T) {
 		userID := uuid.New()
 		principal := &Principal{ID: userID, Email: "test@example.com", Role: "user"}
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req = req.WithContext(context.WithValue(req.Context(), userKey, principal))
 
-		key := UserKey(req)
-		if !strings.Contains(key, userID.String()) {
-			t.Errorf("Ключ должен содержать ID пользователя: %v", key)
+		key := UserKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:"+PolicyAuthenticated+":"+rateBucketVersion+":") {
+			t.Errorf("Ключ должен иметь формат rl:authenticated:v1:<hmac>, получено: %v", key)
+		}
+		if strings.Contains(key, userID.String()) || strings.Contains(key, "test@example.com") {
+			t.Errorf("ID пользователя/email не должны попадать в ключ открытым текстом: %v", key)
 		}
 	})
 
-	t.Run("При отсутствии Principal используется IP", func(t *testing.T) {
+	t.Run("При отсутствии Principal используется изолированный bucket на IP", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.RemoteAddr = "192.168.1.1:12345"
 
-		key := UserKey(req)
-		if !strings.Contains(key, "ip:") {
-			t.Errorf("Должен использоваться IP: %v", key)
+		key := UserKey(testCfg)(req)
+		if !strings.HasPrefix(key, "rl:ip:"+rateBucketVersion+":") {
+			t.Errorf("Должен использоваться hmac(IP) политики ip: %v", key)
 		}
 	})
 }
@@ -778,15 +810,15 @@ func newMemoryRateLimitStore() *memoryRateLimitStore {
 	return &memoryRateLimitStore{now: time.Now, buckets: make(map[string]memoryRateBucket)}
 }
 
-func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (int, error) {
+func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window time.Duration) (domain.RateLimitResult, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return domain.RateLimitResult{}, err
 	}
 	if s.err != nil {
-		return 0, s.err
+		return domain.RateLimitResult{}, s.err
 	}
 	if window <= 0 {
-		return 0, errors.New("Окно должно быть положительным")
+		return domain.RateLimitResult{}, errors.New("Окно должно быть положительным")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -797,7 +829,19 @@ func (s *memoryRateLimitStore) Increment(ctx context.Context, key string, window
 	}
 	bucket.hits++
 	s.buckets[key] = bucket
-	return bucket.hits, nil
+	return domain.RateLimitResult{Count: bucket.hits, ResetAt: bucket.start.Add(window)}, nil
+}
+
+// Reset реализует порт domain.RateLimitStore: удаляет окно ключа целиком
+// (политики login_failed / OnFailedStatus: успешный вход обнуляет ошибки).
+func (s *memoryRateLimitStore) Reset(_ context.Context, key string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.buckets, key)
+	return nil
 }
 
 // Cleanup реализует порт domain.RateLimitStore: удаляет просроченные окна
@@ -825,7 +869,7 @@ func TestRateLimit(t *testing.T) {
 	t.Run("Разрешает запросы в пределах лимита и блокирует следующий", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		called := 0
-		h := RateLimit(store, 2, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(store, 2, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called++
 			w.WriteHeader(http.StatusNoContent)
 		}))
@@ -837,8 +881,14 @@ func TestRateLimit(t *testing.T) {
 			if rec.Code != want {
 				t.Errorf("Запрос %d: статус = %d, ожидается: %d", i+1, rec.Code, want)
 			}
-			if i == 2 && rec.Header().Get("Retry-After") != "60" {
-				t.Errorf("Retry-After = %q, ожидается: 60", rec.Header().Get("Retry-After"))
+			if i == 2 {
+				// Retry-After = ОСТАВШЕЕСЯ время до сброса окна (не вся его длина):
+				// для окна 60с, начатого только что, это 59..60 секунд.
+				ra := rec.Header().Get("Retry-After")
+				secs, err := strconv.Atoi(ra)
+				if err != nil || secs < 59 || secs > 60 {
+					t.Errorf("Retry-After = %q, ожидается остаток окна 59..60", ra)
+				}
 			}
 		}
 		if called != 2 {
@@ -847,7 +897,7 @@ func TestRateLimit(t *testing.T) {
 	})
 	t.Run("Разные IP используют разные счетчики", func(t *testing.T) {
 		store := newMemoryRateLimitStore()
-		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		h := RateLimit(store, 1, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		for _, ip := range []string{"192.0.2.1:1234", "192.0.2.2:1234"} {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = ip
@@ -862,7 +912,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 		store.now = func() time.Time { return now }
-		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		h := RateLimit(store, 1, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		makeReq := func() *httptest.ResponseRecorder {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = "192.0.2.1:1234"
@@ -885,7 +935,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		var allowed int
 		var allowedMu sync.Mutex
-		h := RateLimit(store, 7, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(store, 7, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowedMu.Lock()
 			allowed++
 			allowedMu.Unlock()
@@ -914,7 +964,7 @@ func TestRateLimit(t *testing.T) {
 		store := newMemoryRateLimitStore()
 		store.err = errors.New("Хранилище недоступно")
 		called := false
-		h := RateLimit(store, 1, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+		h := RateLimit(store, 1, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 		if rec.Code != http.StatusServiceUnavailable {
@@ -925,7 +975,7 @@ func TestRateLimit(t *testing.T) {
 		}
 	})
 	t.Run("Некорректная конфигурация не отключает защиту молча", func(t *testing.T) {
-		h := RateLimit(newMemoryRateLimitStore(), 0, time.Minute, IPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RateLimit(newMemoryRateLimitStore(), 0, time.Minute, IPKey(testCfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("Обработчик не должен вызываться")
 		}))
 		rec := httptest.NewRecorder()
@@ -944,9 +994,9 @@ func TestAccountGlobalKey(t *testing.T) {
 		r.RemoteAddr = "192.0.2.1:1234"
 		return r
 	}
-	a := AccountGlobalKey(request(`{"email":" Alice@Example.com ","password":"x"}`))
-	b := AccountGlobalKey(request(`{"email":"bob@example.com","password":"x"}`))
-	c := AccountGlobalKey(request(`{"email":"alice@example.com","password":"y"}`))
+	a := AccountGlobalKey(testCfg)(request(`{"email":" Alice@Example.com ","password":"x"}`))
+	b := AccountGlobalKey(testCfg)(request(`{"email":"bob@example.com","password":"x"}`))
+	c := AccountGlobalKey(testCfg)(request(`{"email":"alice@example.com","password":"y"}`))
 	if a != c {
 		t.Errorf("Один email должен давать одинаковый ключ: %q != %q", a, c)
 	}
@@ -960,7 +1010,7 @@ func TestAccountGlobalKey(t *testing.T) {
 func TestAccountIPKeyPreservesBody(t *testing.T) {
 	body := `{"email":"User@Example.com","password":"StrongPass123"}`
 	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
-	_ = AccountIPKey(r)
+	_ = AccountIPKey(testCfg)(r)
 	got, err := io.ReadAll(r.Body)
 	if err != nil {
 		t.Fatal(err)

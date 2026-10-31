@@ -29,6 +29,10 @@ services:
       APP_PORT: "8080"
       POSTGRES_HOST: postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-synapse-default-user}:${POSTGRES_PASSWORD:-synapse-default-password}@postgres:5432/${POSTGRES_DB:-synapse-default-db}?sslmode=disable
+      # Ключ HMAC для хеширования PII в bucket_key api_rate_limits
+      # (rl:<policy>:v1:<hmac>). Значение берётся из .env; сгенерировать:
+      # openssl rand -base64 48
+      RATE_LIMIT_HMAC_KEY: ${RATE_LIMIT_HMAC_KEY:?set RATE_LIMIT_HMAC_KEY in .env}
     ports:
       - "${API_HOST_PORT:-8080}:8080"
     healthcheck:

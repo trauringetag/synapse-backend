@@ -25,7 +25,11 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		pool.Close()
 		return nil, fmt.Errorf("База данных недоступна: %w", err)
 	}
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS api_rate_limits (bucket_key TEXT PRIMARY KEY, window_start TIMESTAMPTZ NOT NULL, hits INTEGER NOT NULL CHECK (hits > 0), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS idx_api_rate_limits_updated ON api_rate_limits(updated_at)`); err != nil {
+	if _, err := pool.Exec(ctx, `-- Формат bucket_key: rl:<route_policy>:<version>:<hmac_sha256(id)> (см. init.sql).
+-- IP/email хешируются HMAC-SHA256 с RATE_LIMIT_HMAC_KEY — PII в таблице не хранится.
+-- Строки старого формата (ip:<IP>, login:<IP>:<email>) устарели: новый код их не читает,
+-- фоновый Cleanup удалит их по истечении окна.
+CREATE TABLE IF NOT EXISTS api_rate_limits (bucket_key TEXT PRIMARY KEY, window_start TIMESTAMPTZ NOT NULL, hits INTEGER NOT NULL CHECK (hits > 0), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS idx_api_rate_limits_updated ON api_rate_limits(updated_at)`); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("Не удалось подготовить Rate-limiter: %w", err)
 	}
